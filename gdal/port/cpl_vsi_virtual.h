@@ -36,6 +36,7 @@
 
 #include "cpl_vsi.h"
 #include "cpl_string.h"
+#include "cpl_multiproc.h"
 
 #if defined(WIN32CE)
 #  include "cpl_wince.h"
@@ -162,7 +163,7 @@ class VSIArchiveReader
 class VSIArchiveFilesystemHandler : public VSIFilesystemHandler 
 {
 protected:
-    void* hMutex;
+    CPLMutex* hMutex;
     /* We use a cache that contains the list of files containes in a VSIArchive file as */
     /* unarchive.c is quite inefficient in listing them. This speeds up access to VSIArchive files */
     /* containing ~1000 files like a CADRG product */
@@ -190,6 +191,9 @@ public:
 };
 
 VSIVirtualHandle CPL_DLL *VSICreateBufferedReaderHandle(VSIVirtualHandle* poBaseHandle);
+VSIVirtualHandle* VSICreateBufferedReaderHandle(VSIVirtualHandle* poBaseHandle,
+                                                const GByte* pabyBeginningContent,
+                                                vsi_l_offset nSheatFileSize);
 VSIVirtualHandle* VSICreateCachedFile( VSIVirtualHandle* poBaseHandle, size_t nChunkSize = 32768, size_t nCacheSize = 0 );
 VSIVirtualHandle CPL_DLL *VSICreateGZipWritable( VSIVirtualHandle* poBaseHandle, int bRegularZLibIn, int bAutoCloseBaseHandle );
 

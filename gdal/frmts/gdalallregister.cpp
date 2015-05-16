@@ -231,6 +231,7 @@ void CPL_STDCALL GDALAllRegister()
     GDALRegister_ISIS3();
     GDALRegister_ISIS2();
     GDALRegister_PDS();
+    GDALRegister_VICAR();
 #endif
 
 #ifdef FRMT_til
@@ -516,6 +517,10 @@ void CPL_STDCALL GDALAllRegister()
 
 #ifdef FRMT_iris
     GDALRegister_IRIS();
+#endif
+
+#ifdef FRMT_plmosaic
+    GDALRegister_PLMOSAIC();
 #endif
 
     OGRRegisterAllInternal();

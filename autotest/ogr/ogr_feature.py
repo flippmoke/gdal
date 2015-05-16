@@ -29,15 +29,12 @@
 # DEALINGS IN THE SOFTWARE.
 ###############################################################################
 
-import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
 from osgeo import gdal, ogr
 import gdaltest
-import ogrtest
 
 ###############################################################################
 # Create a destination feature type with one field for each field in the source
@@ -65,6 +62,9 @@ def mk_src_feature():
     field_def = ogr.FieldDefn( 'field_integer', ogr.OFTInteger )
     feat_def.AddFieldDefn( field_def )
     
+    field_def = ogr.FieldDefn( 'field_integer64', ogr.OFTInteger64 )
+    feat_def.AddFieldDefn( field_def )
+    
     field_def = ogr.FieldDefn( 'field_real', ogr.OFTReal )
     feat_def.AddFieldDefn( field_def )
 
@@ -86,6 +86,9 @@ def mk_src_feature():
     field_def = ogr.FieldDefn( 'field_integerlist', ogr.OFTIntegerList )
     feat_def.AddFieldDefn( field_def )
 
+    field_def = ogr.FieldDefn( 'field_integer64list', ogr.OFTInteger64List )
+    feat_def.AddFieldDefn( field_def )
+
     field_def = ogr.FieldDefn( 'field_reallist', ogr.OFTRealList )
     feat_def.AddFieldDefn( field_def )
 
@@ -94,13 +97,22 @@ def mk_src_feature():
 
     src_feature = ogr.Feature( feat_def )
     src_feature.SetField( 'field_integer', 17 )
+    src_feature.SetField( 'field_integer64', 9876543210 )
     src_feature.SetField( 'field_real', 18.4 )
     src_feature.SetField( 'field_string', 'abc def' )
     src_feature.SetFieldBinaryFromHexString( 'field_binary', '0123465789ABCDEF' )
     src_feature.SetField( 'field_date', '2011/11/11' )
     src_feature.SetField( 'field_time', '14:10:35' )
-    src_feature.SetField( 'field_datetime', '2011/11/11 14:10:35')
+    src_feature.SetField( 'field_datetime', 2011,11,11,14,10,35.123,0)
+    got_vals = src_feature.GetFieldAsDateTime(feat_def.GetFieldIndex('field_datetime'))
+    expected_vals = [2011, 11, 11, 14, 10, 35.123, 0]
+    for i in range(len(expected_vals)):
+        if abs(got_vals[i]-expected_vals[i]) > 1e-4:
+            gdaltest.post_reason('fail')
+            print(got_vals)
+            print(expected_vals)
     src_feature.field_integerlist = '(3:10,20,30)'
+    src_feature.field_integer64list = [9876543210]
     src_feature.field_reallist = [123.5,567.0]
     src_feature.field_stringlist = ['abc','def']
 
@@ -115,6 +127,7 @@ def check( feat, fieldname, value ):
                               % (str(value), fieldname,
                                  str(feat.GetField(fieldname))),
                               frames = 3 )
+        feat.DumpReadable()
         return 0
     else:
         return 1
@@ -123,17 +136,22 @@ def check( feat, fieldname, value ):
 ###############################################################################
 # Copy to Integer
 
-def ogr_feature_cp_1():
+def ogr_feature_cp_integer():
     src_feature = mk_src_feature()
     src_feature.field_integerlist = [15]
     src_feature.field_reallist = [17.5]
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTInteger )
+    gdal.PushErrorHandler()
     dst_feature.SetFrom( src_feature )
+    gdal.PopErrorHandler()
 
     if not check( dst_feature, 'field_integer', 17 ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', 2147483647 ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', 18 ):
         return 'failure'
 
@@ -155,6 +173,65 @@ def ogr_feature_cp_1():
     if not check( dst_feature, 'field_integerlist', 15 ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', 2147483647 ):
+        return 'failure'
+    
+    if not check( dst_feature, 'field_reallist', 17 ):
+        return 'failure'
+    
+    if not check( dst_feature, 'field_stringlist', None ):
+        return 'failure'
+    
+    return 'success'
+    
+###############################################################################
+# Copy to Integer64
+
+def ogr_feature_cp_integer64():
+    src_feature = mk_src_feature()
+    src_feature.field_integerlist = [15]
+    src_feature.field_reallist = [17.5]
+
+    dst_feature = mk_dst_feature( src_feature, ogr.OFTInteger64 )
+    dst_feature.SetFrom( src_feature )
+
+    if not check( dst_feature, 'field_integer', 17 ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64', 9876543210 ):
+        return 'failure'
+    
+    gdal.PushErrorHandler()
+    int32_ovflw = dst_feature.GetFieldAsInteger('field_integer64')
+    gdal.PopErrorHandler()
+    if int32_ovflw != 2147483647:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    
+    if not check( dst_feature, 'field_real', 18 ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_string', 0 ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_binary', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_date', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_time', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_datetime', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integerlist', 15 ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64list', 9876543210 ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', 17 ):
         return 'failure'
     
@@ -166,7 +243,7 @@ def ogr_feature_cp_1():
 ###############################################################################
 # Copy to Real
 
-def ogr_feature_cp_2():
+def ogr_feature_cp_real():
     src_feature = mk_src_feature()
     src_feature.field_integerlist = [15]
     src_feature.field_reallist = [17.5]
@@ -209,13 +286,16 @@ def ogr_feature_cp_2():
 ###############################################################################
 # Copy to String
 
-def ogr_feature_cp_3():
+def ogr_feature_cp_string():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTString )
     dst_feature.SetFrom( src_feature )
 
     if not check( dst_feature, 'field_integer', '17' ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64', '9876543210' ):
         return 'failure'
 
     if not check( dst_feature, 'field_real', '18.4' ):
@@ -233,12 +313,15 @@ def ogr_feature_cp_3():
     if not check( dst_feature, 'field_time', '14:10:35' ):
         return 'failure'
 
-    if not check( dst_feature, 'field_datetime', '2011/11/11 14:10:35' ):
+    if not check( dst_feature, 'field_datetime', '2011/11/11 14:10:35.123' ):
         return 'failure'
 
     if not check( dst_feature, 'field_integerlist', '(3:10,20,30)' ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', '(1:9876543210)' ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', '(2:123.5,567)' ):
         return 'failure'
     
@@ -250,7 +333,7 @@ def ogr_feature_cp_3():
 ###############################################################################
 # Copy to Binary
 
-def ogr_feature_cp_4():
+def ogr_feature_cp_binary():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTBinary )
@@ -259,6 +342,9 @@ def ogr_feature_cp_4():
     if not check( dst_feature, 'field_integer', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', None ):
         return 'failure'
 
@@ -288,6 +374,9 @@ def ogr_feature_cp_4():
     if not check( dst_feature, 'field_integerlist', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', None ):
         return 'failure'
     
@@ -299,7 +388,7 @@ def ogr_feature_cp_4():
 ###############################################################################
 # Copy to date
 
-def ogr_feature_cp_5():
+def ogr_feature_cp_date():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTDate )
@@ -308,6 +397,9 @@ def ogr_feature_cp_5():
     if not check( dst_feature, 'field_integer', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', None ):
         return 'failure'
 
@@ -329,6 +421,9 @@ def ogr_feature_cp_5():
     if not check( dst_feature, 'field_integerlist', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', None ):
         return 'failure'
     
@@ -340,7 +435,7 @@ def ogr_feature_cp_5():
 ###############################################################################
 # Copy to time
 
-def ogr_feature_cp_6():
+def ogr_feature_cp_time():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTTime )
@@ -349,6 +444,9 @@ def ogr_feature_cp_6():
     if not check( dst_feature, 'field_integer', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', None ):
         return 'failure'
 
@@ -358,18 +456,21 @@ def ogr_feature_cp_6():
     if not check( dst_feature, 'field_binary', None ):
         return 'failure'
 
-    if not check( dst_feature, 'field_date', ' 0:00:00' ):
+    if not check( dst_feature, 'field_date', '00:00:00' ):
         return 'failure'
 
     if not check( dst_feature, 'field_time', '14:10:35' ):
         return 'failure'
 
-    if not check( dst_feature, 'field_datetime', '14:10:35' ):
+    if not check( dst_feature, 'field_datetime', '14:10:35.123' ):
         return 'failure'
 
     if not check( dst_feature, 'field_integerlist', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', None ):
         return 'failure'
     
@@ -381,7 +482,7 @@ def ogr_feature_cp_6():
 ###############################################################################
 # Copy to datetime
 
-def ogr_feature_cp_7():
+def ogr_feature_cp_datetime():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTDateTime )
@@ -390,6 +491,9 @@ def ogr_feature_cp_7():
     if not check( dst_feature, 'field_integer', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', None ):
         return 'failure'
 
@@ -405,12 +509,15 @@ def ogr_feature_cp_7():
     if not check( dst_feature, 'field_time', '0000/00/00 14:10:35' ):
         return 'failure'
 
-    if not check( dst_feature, 'field_datetime', '2011/11/11 14:10:35' ):
+    if not check( dst_feature, 'field_datetime', '2011/11/11 14:10:35.123' ):
         return 'failure'
 
     if not check( dst_feature, 'field_integerlist', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', None ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', None ):
         return 'failure'
     
@@ -422,15 +529,20 @@ def ogr_feature_cp_7():
 ###############################################################################
 # Copy to integerlist
 
-def ogr_feature_cp_8():
+def ogr_feature_cp_integerlist():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTIntegerList )
+    gdal.PushErrorHandler()
     dst_feature.SetFrom( src_feature )
+    gdal.PopErrorHandler()
 
     if not check( dst_feature, 'field_integer', [17] ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', [2147483647] ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', [18] ):
         return 'failure'
 
@@ -452,6 +564,56 @@ def ogr_feature_cp_8():
     if not check( dst_feature, 'field_integerlist', [10, 20, 30] ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', [2147483647] ):
+        return 'failure'
+    
+    if not check( dst_feature, 'field_reallist', [123,567] ):
+        return 'failure'
+    
+    if not check( dst_feature, 'field_stringlist', None ):
+        return 'failure'
+    
+    return 'success'
+
+###############################################################################
+# Copy to integer64list
+
+def ogr_feature_cp_integer64list():
+    src_feature = mk_src_feature()
+
+    dst_feature = mk_dst_feature( src_feature, ogr.OFTInteger64List )
+    dst_feature.SetFrom( src_feature )
+
+    if not check( dst_feature, 'field_integer', [17] ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64', [9876543210] ):
+        return 'failure'
+    
+    if not check( dst_feature, 'field_real', [18] ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_string', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_binary', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_date', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_time', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_datetime', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integerlist', [10, 20, 30] ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64list', [9876543210] ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', [123,567] ):
         return 'failure'
     
@@ -463,7 +625,7 @@ def ogr_feature_cp_8():
 ###############################################################################
 # Copy to reallist
 
-def ogr_feature_cp_9():
+def ogr_feature_cp_reallist():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTRealList )
@@ -472,6 +634,9 @@ def ogr_feature_cp_9():
     if not check( dst_feature, 'field_integer', [17.0] ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64', [9876543210.0] ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_real', [18.4] ):
         return 'failure'
 
@@ -493,6 +658,9 @@ def ogr_feature_cp_9():
     if not check( dst_feature, 'field_integerlist', [10.0,20.0,30.0] ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', [9876543210.0] ):
+        return 'failure'
+    
     if not check( dst_feature, 'field_reallist', [123.5, 567.0] ):
         return 'failure'
     
@@ -504,13 +672,16 @@ def ogr_feature_cp_9():
 ###############################################################################
 # Copy to stringlist
 
-def ogr_feature_cp_10():
+def ogr_feature_cp_stringlist():
     src_feature = mk_src_feature()
 
     dst_feature = mk_dst_feature( src_feature, ogr.OFTStringList )
     dst_feature.SetFrom( src_feature )
 
     if not check( dst_feature, 'field_integer', None ):
+        return 'failure'
+
+    if not check( dst_feature, 'field_integer64', None ):
         return 'failure'
 
     if not check( dst_feature, 'field_real', None ):
@@ -534,6 +705,9 @@ def ogr_feature_cp_10():
     if not check( dst_feature, 'field_integerlist', None ):
         return 'failure'
 
+    if not check( dst_feature, 'field_integer64list', None ):
+        return 'failure'
+
     if not check( dst_feature, 'field_reallist', None ):
         return 'failure'
     
@@ -546,8 +720,7 @@ def ogr_feature_cp_10():
 ###############################################################################
 # Test SetField() with unicode string
 
-def ogr_feature_cp_11():
-    from sys import version_info
+def ogr_feature_unicode():
     if sys.version_info >= (3,0,0):
         return 'skip'
 
@@ -563,6 +736,261 @@ def ogr_feature_cp_11():
 
     return 'success'
 
+###############################################################################
+# Test 64bit FID
+
+def ogr_feature_64bit_fid():
+    
+    feat_def = ogr.FeatureDefn( 'test' )
+    f = ogr.Feature(feat_def)
+    f.SetFID(123456789012345)
+    if f.GetFID() != 123456789012345:
+        return 'failure'
+    return 'success'
+
+###############################################################################
+# Test 64bit integer
+
+def ogr_feature_overflow_64bit_integer():
+    
+    feat_def = ogr.FeatureDefn( 'test' )
+    feat_def.AddFieldDefn(ogr.FieldDefn('test', ogr.OFTInteger64))
+    f = ogr.Feature(feat_def)
+    gdal.PushErrorHandler()
+    f.SetField(0, '9999999999999999999')
+    gdal.PopErrorHandler()
+    if f.GetField(0) != 9223372036854775807:
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'failure'
+    gdal.PushErrorHandler()
+    f.SetField(0, '-9999999999999999999')
+    gdal.PopErrorHandler()
+    if f.GetField(0) != -9223372036854775808:
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'failure'
+    return 'success'
+
+###############################################################################
+# Test SetNullable(), IsNullable() and Validate()
+
+def ogr_feature_nullable_validate():
+    # No fields
+    feat_def = ogr.FeatureDefn( 'test' )
+    f = ogr.Feature(feat_def)
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Field with default parameter and empty feature
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    if field_def.IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    if feat_def.GetGeomFieldDefn(0).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    feat_def.AddFieldDefn( field_def )
+    f = ogr.Feature(feat_def)
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Field with not NULL constraint and empty feature
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_def.SetNullable(0)
+    if field_def.IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    feat_def.AddFieldDefn( field_def )
+    f = ogr.Feature(feat_def)
+    gdal.PushErrorHandler()
+    ret = f.Validate()
+    gdal.PopErrorHandler()
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Field with not NULL constraint and non-empty feature
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_def.SetNullable(0)
+    feat_def.AddFieldDefn( field_def )
+    f = ogr.Feature(feat_def)
+    f.SetField(0, 'foo')
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Field with width constraint that is met
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_def.SetWidth(3)
+    feat_def.AddFieldDefn( field_def )
+    f = ogr.Feature(feat_def)
+    f.SetField(0, 'foo')
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Field with width constraint that is not met
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_def.SetWidth(2)
+    feat_def.AddFieldDefn( field_def )
+    f = ogr.Feature(feat_def)
+    f.SetField(0, 'foo')
+    gdal.PushErrorHandler()
+    ret = f.Validate()
+    gdal.PopErrorHandler()
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Geometry field with not-null geometry constraint that is met
+    feat_def = ogr.FeatureDefn( 'test' )
+    feat_def.SetGeomType(ogr.wkbNone)
+    gfield_def = ogr.GeomFieldDefn( 'test', ogr.wkbUnknown )
+    gfield_def.SetNullable(0)
+    if gfield_def.IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    feat_def.AddGeomFieldDefn( gfield_def )
+    f = ogr.Feature(feat_def)
+    f.SetGeometry(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Geometry field with not-null geometry constraint that is not met
+    feat_def = ogr.FeatureDefn( 'test' )
+    feat_def.SetGeomType(ogr.wkbNone)
+    gfield_def = ogr.GeomFieldDefn( 'test', ogr.wkbPoint )
+    gfield_def.SetNullable(0)
+    feat_def.AddGeomFieldDefn( gfield_def )
+    f = ogr.Feature(feat_def)
+    gdal.PushErrorHandler()
+    ret = f.Validate()
+    gdal.PopErrorHandler()
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Geometry field with Point geometry type that is met
+    feat_def = ogr.FeatureDefn( 'test' )
+    feat_def.SetGeomType(ogr.wkbPoint)
+    f = ogr.Feature(feat_def)
+    f.SetGeometry(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    if f.Validate() != 1:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    # Geometry field with LineString geometry type that is not met
+    feat_def = ogr.FeatureDefn( 'test' )
+    feat_def.SetGeomType(ogr.wkbLineString)
+    f = ogr.Feature(feat_def)
+    f.SetGeometry(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    gdal.PushErrorHandler()
+    ret = f.Validate()
+    gdal.PopErrorHandler()
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    return 'success'
+
+###############################################################################
+# Test SetDefault(), GetDefault(), IsDefaultDriverSpecific() and FillUnsetWithDefault()
+
+def ogr_feature_default():
+
+    feat_def = ogr.FeatureDefn( 'test' )
+    field_def = ogr.FieldDefn( 'field_string', ogr.OFTString )
+
+    if field_def.GetDefault() is not None:
+        gdaltest.post_reason('fail')
+        return 'failure'
+    if field_def.IsDefaultDriverSpecific():
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    field_def.SetDefault("(some_expr)")
+    if field_def.GetDefault() != "(some_expr)":
+        gdaltest.post_reason('fail')
+        return 'failure'
+    if not field_def.IsDefaultDriverSpecific():
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    gdal.PushErrorHandler()
+    field_def.SetDefault("'a")
+    gdal.PopErrorHandler()
+    if field_def.GetDefault() is not None:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    gdal.PushErrorHandler()
+    field_def.SetDefault("'a''")
+    gdal.PopErrorHandler()
+    if field_def.GetDefault() is not None:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    gdal.PushErrorHandler()
+    field_def.SetDefault("'a'b'")
+    gdal.PopErrorHandler()
+    if field_def.GetDefault() is not None:
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    field_def.SetDefault("'a''b'''")
+    if field_def.GetDefault() != "'a''b'''":
+        gdaltest.post_reason('fail')
+        return 'failure'
+    if field_def.IsDefaultDriverSpecific():
+        gdaltest.post_reason('fail')
+        return 'failure'
+    feat_def.AddFieldDefn( field_def )
+
+    field_def = ogr.FieldDefn( 'field_datetime', ogr.OFTDateTime )
+    field_def.SetDefault("CURRENT_TIMESTAMP")
+    feat_def.AddFieldDefn( field_def )
+
+    field_def = ogr.FieldDefn( 'field_datetime2', ogr.OFTDateTime )
+    field_def.SetDefault("'2015/06/30 12:34:56'")
+    feat_def.AddFieldDefn( field_def )
+
+    field_def = ogr.FieldDefn( 'field_int', ogr.OFTInteger )
+    field_def.SetDefault('123')
+    feat_def.AddFieldDefn( field_def )
+
+    field_def = ogr.FieldDefn( 'field_nodefault', ogr.OFTInteger )
+    feat_def.AddFieldDefn( field_def )
+
+    f = ogr.Feature(feat_def)
+    f.FillUnsetWithDefault()
+    if f.GetField('field_string') != 'a\'b\'' or \
+       not f.IsFieldSet('field_datetime') or \
+       f.GetField('field_datetime2') != '2015/06/30 12:34:56+00' or \
+       f.GetField('field_int') != 123 or \
+       f.IsFieldSet('field_nodefault'):
+        f.DumpReadable()
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    f = ogr.Feature(feat_def)
+    f.SetField('field_string', 'b')
+    f.FillUnsetWithDefault()
+    if f.GetField('field_string') != 'b':
+        f.DumpReadable()
+        gdaltest.post_reason('fail')
+        return 'failure'
+
+    return 'success'
+
 
 def ogr_feature_cleanup():
 
@@ -571,17 +999,23 @@ def ogr_feature_cleanup():
     return 'success'
 
 gdaltest_list = [ 
-    ogr_feature_cp_1,
-    ogr_feature_cp_2,
-    ogr_feature_cp_3,
-    ogr_feature_cp_4,
-    ogr_feature_cp_5,
-    ogr_feature_cp_6,
-    ogr_feature_cp_7,
-    ogr_feature_cp_8,
-    ogr_feature_cp_9,
-    ogr_feature_cp_10,
-    ogr_feature_cp_11,
+    ogr_feature_cp_integer,
+    ogr_feature_cp_integer64,
+    ogr_feature_cp_real,
+    ogr_feature_cp_string,
+    ogr_feature_cp_binary,
+    ogr_feature_cp_date,
+    ogr_feature_cp_time,
+    ogr_feature_cp_datetime,
+    ogr_feature_cp_integerlist,
+    ogr_feature_cp_integer64list,
+    ogr_feature_cp_reallist,
+    ogr_feature_cp_stringlist,
+    ogr_feature_unicode,
+    ogr_feature_64bit_fid,
+    ogr_feature_overflow_64bit_integer,
+    ogr_feature_nullable_validate,
+    ogr_feature_default,
     ogr_feature_cleanup ]
 
 if __name__ == '__main__':

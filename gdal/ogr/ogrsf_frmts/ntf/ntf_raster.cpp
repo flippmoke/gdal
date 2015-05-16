@@ -346,7 +346,7 @@ OGRFeature *OGRNTFRasterLayer::GetNextFeature()
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *OGRNTFRasterLayer::GetFeature( long nFeatureId )
+OGRFeature *OGRNTFRasterLayer::GetFeature( GIntBig nFeatureId )
 
 {
     int         iReqColumn, iReqRow;
@@ -363,8 +363,8 @@ OGRFeature *OGRNTFRasterLayer::GetFeature( long nFeatureId )
 /* -------------------------------------------------------------------- */
 /*      Do we need to load a different column.                          */
 /* -------------------------------------------------------------------- */
-    iReqColumn = (nFeatureId - 1) / poReader->GetRasterYSize();
-    iReqRow = nFeatureId - iReqColumn * poReader->GetRasterXSize() - 1;
+    iReqColumn = ((int)nFeatureId - 1) / poReader->GetRasterYSize();
+    iReqRow = (int)nFeatureId - iReqColumn * poReader->GetRasterXSize() - 1;
     
     if( iReqColumn != iColumnOffset )
     {
@@ -401,7 +401,7 @@ OGRFeature *OGRNTFRasterLayer::GetFeature( long nFeatureId )
 /*      way of counting features matching a spatial query.              */
 /************************************************************************/
 
-int OGRNTFRasterLayer::GetFeatureCount( CPL_UNUSED int bForce )
+GIntBig OGRNTFRasterLayer::GetFeatureCount( CPL_UNUSED int bForce )
 {
     return nFeatureCount;
 }

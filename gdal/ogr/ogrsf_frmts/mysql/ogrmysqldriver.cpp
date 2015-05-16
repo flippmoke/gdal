@@ -33,7 +33,7 @@
 
 CPL_CVSID("$Id$");
 
-static void* hMutex = NULL;
+static CPLMutex* hMutex = NULL;
 static int   bInitialized = FALSE;
 
 /************************************************************************/
@@ -55,6 +55,16 @@ static void OGRMySQLDriverUnload( CPL_UNUSED GDALDriver* poDriver )
 }
 
 /************************************************************************/
+/*                         OGRMySQLDriverIdentify()                     */
+/************************************************************************/
+
+static int OGRMySQLDriverIdentify( GDALOpenInfo* poOpenInfo )
+
+{
+    return EQUALN(poOpenInfo->pszFilename,"MYSQL:",6);
+}
+ 
+/************************************************************************/
 /*                                Open()                                */
 /************************************************************************/
 
@@ -63,7 +73,7 @@ static GDALDataset *OGRMySQLDriverOpen( GDALOpenInfo* poOpenInfo )
 {
     OGRMySQLDataSource     *poDS;
 
-    if( !EQUALN(poOpenInfo->pszFilename,"MYSQL:",6) )
+    if( !OGRMySQLDriverIdentify(poOpenInfo) )
         return NULL;
  
     {
@@ -81,7 +91,8 @@ static GDALDataset *OGRMySQLDriverOpen( GDALOpenInfo* poOpenInfo )
 
     poDS = new OGRMySQLDataSource();
 
-    if( !poDS->Open( poOpenInfo->pszFilename, poOpenInfo->eAccess == GA_Update ) )
+    if( !poDS->Open( poOpenInfo->pszFilename, poOpenInfo->papszOpenOptions,
+                     poOpenInfo->eAccess == GA_Update ) )
     {
         delete poDS;
         return NULL;
@@ -107,7 +118,7 @@ static GDALDataset *OGRMySQLDriverCreate( const char * pszName,
     poDS = new OGRMySQLDataSource();
 
 
-    if( !poDS->Open( pszName, TRUE ) )
+    if( !poDS->Open( pszName, NULL, TRUE ) )
     {
         delete poDS;
         CPLError( CE_Failure, CPLE_AppDefined, 
@@ -140,9 +151,40 @@ void RegisterOGRMySQL()
         poDriver->SetMetadataItem( GDAL_DMD_LONGNAME,
                                    "MySQL" );
         poDriver->SetMetadataItem( GDAL_DMD_HELPTOPIC,
-                                   "drv_mysqls.html" );
+                                   "drv_mysql.html" );
+
+        poDriver->SetMetadataItem( GDAL_DMD_CONNECTION_PREFIX, "MYSQL:" );
+
+        poDriver->SetMetadataItem( GDAL_DMD_OPENOPTIONLIST,
+"<OpenOptionList>"
+"  <Option name='DBNAME' type='string' description='Database name' required='true'/>"
+"  <Option name='PORT' type='int' description='Port'/>"
+"  <Option name='USER' type='string' description='User name'/>"
+"  <Option name='PASSWORD' type='string' description='Password'/>"
+"  <Option name='HOST' type='string' description='Server hostname'/>"
+"  <Option name='TABLES' type='string' description='Restricted set of tables to list (comma separated)'/>"
+"</OpenOptionList>");
+
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST, "<CreationOptionList/>");
+
+        poDriver->SetMetadataItem( GDAL_DS_LAYER_CREATIONOPTIONLIST,
+    "<LayerCreationOptionList>"
+    "  <Option name='OVERWRITE' type='boolean' description='Whether to overwrite an existing table with the layer name to be created' default='NO'/>"
+    "  <Option name='LAUNDER' type='boolean' description='Whether layer and field names will be laundered' default='YES'/>"
+    "  <Option name='PRECISION' type='boolean' description='Whether fields created should keep the width and precision' default='YES'/>"
+    "  <Option name='GEOMETRY_NAME' type='string' description='Name of geometry column.' default='SHAPE'/>"
+    "  <Option name='SPATIAL_INDEX' type='boolean' description='Whether to create a spatial index' default='YES'/>"
+    "  <Option name='FID' type='string' description='Name of the FID column to create' default='OGR_FID' deprecated_alias='MYSQL_FID'/>"
+    "  <Option name='FID64' type='boolean' description='Whether to create the FID column with BIGINT type to handle 64bit wide ids' default='NO'/>"
+    "  <Option name='ENGINE' type='string' description='Database engine to use.'/>"
+    "</LayerCreationOptionList>");
+        
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONFIELDDATATYPES, "Integer Integer64 Real String Date DateTime Time Binary" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_DEFAULT_FIELDS, "YES" );
 
         poDriver->pfnOpen = OGRMySQLDriverOpen;
+        poDriver->pfnIdentify = OGRMySQLDriverIdentify;
         poDriver->pfnCreate = OGRMySQLDriverCreate;
         poDriver->pfnUnloadDriver = OGRMySQLDriverUnload;
 

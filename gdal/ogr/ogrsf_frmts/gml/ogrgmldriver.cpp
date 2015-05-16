@@ -107,7 +107,7 @@ static GDALDataset *OGRGMLDriverOpen( GDALOpenInfo* poOpenInfo )
 
     poDS = new OGRGMLDataSource();
 
-    if( !poDS->Open(  poOpenInfo->pszFilename ) )
+    if( !poDS->Open(  poOpenInfo ) )
     {
         delete poDS;
         return NULL;
@@ -160,6 +160,12 @@ void RegisterOGRGML()
         poDriver->SetMetadataItem( GDAL_DMD_HELPTOPIC,
                                    "drv_gml.html" );
 
+        poDriver->SetMetadataItem( GDAL_DMD_OPENOPTIONLIST,
+"<OpenOptionList>"
+"  <Option name='XSD' type='string' description='Name of the related application schema file (.xsd).'/>"
+"  <Option name='FORCE_SRS_DETECTION' type='boolean' description='Force a full scan to detect the SRS of layers.' default='NO'/>"
+"</OpenOptionList>" );
+
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST,
 "<CreationOptionList>"
 "  <Option name='XSISCHEMAURI' type='string' description='URI to be inserted as the schema location.'/>"
@@ -185,12 +191,19 @@ void RegisterOGRGML()
 "    <Value>GEOMETRY</Value>"
 "    <Value>GEOMETRY,POSLIST</Value>"
 "  </Option>"
+"  <Option name='GML_ID' type='string' description='Value of feature collection gml:id (GML 3.2 only)' default='aFeatureCollection'/>"
+"  <Option name='NAME' type='string' description='Content of GML name element'/>"
+"  <Option name='DESCRIPTION' type='string' description='Content of GML description element'/>"
 "</CreationOptionList>");
 
         poDriver->SetMetadataItem( GDAL_DS_LAYER_CREATIONOPTIONLIST, "<LayerCreationOptionList/>");
+        
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONFIELDDATATYPES, "Integer Integer64 Real String Date DateTime IntegerList Integer64List RealList StringList" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_GEOMFIELDS, "YES" );
 
         poDriver->SetMetadataItem( GDAL_DCAP_VIRTUALIO, "YES" );
-
+        
         poDriver->pfnOpen = OGRGMLDriverOpen;
         poDriver->pfnIdentify = OGRGMLDriverIdentify;
         poDriver->pfnCreate = OGRGMLDriverCreate;

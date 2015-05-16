@@ -34,6 +34,7 @@
 #include "cpl_string.h"
 #include "cpl_vsi.h"
 #include "cpl_multiproc.h"
+#include <errno.h>
 
 CPL_CVSID("$Id$");
 
@@ -41,16 +42,16 @@ CPL_CVSID("$Id$");
 #  include "cpl_wince.h"
 #endif
 
-static void *hConfigMutex = NULL;
+static CPLMutex *hConfigMutex = NULL;
 static volatile char **papszConfigOptions = NULL;
 
 /* Used by CPLOpenShared() and friends */
-static void *hSharedFileMutex = NULL;
+static CPLMutex *hSharedFileMutex = NULL;
 static volatile int nSharedFileCount = 0;
 static volatile CPLSharedFileInfo *pasSharedFileList = NULL;
 
 /* Used by CPLsetlocale() */
-static void *hSetLocaleMutex = NULL;
+static CPLMutex *hSetLocaleMutex = NULL;
 
 /* Note: ideally this should be added in CPLSharedFileInfo* */
 /* but CPLSharedFileInfo is exposed in the API, hence that trick */
@@ -925,6 +926,93 @@ GUIntBig CPLScanUIntBig( const char *pszString, int nMaxLength )
 
     CPLFree( pszValue );
     return iValue;
+}
+
+/************************************************************************/
+/*                           CPLAtoGIntBig()                            */
+/************************************************************************/
+
+/**
+ * Convert a string to a 64 bit signed integer.
+ * 
+ * @param pszString String containing 64 bit signed integer.
+ * @return 64 bit signed integer.
+ * @since GDAL 2.0
+ */
+
+GIntBig CPLAtoGIntBig( const char* pszString )
+{
+#if defined(__MSVCRT__) || (defined(WIN32) && defined(_MSC_VER))
+    return _atoi64( pszString );
+# elif HAVE_ATOLL
+    return atoll( pszString );
+#else
+    return atol( pszString );
+#endif
+}
+
+#if defined(__MINGW32__)
+
+// mingw atoll() doesn't return ERANGE in case of overflow
+int CPLAtoGIntBigExHasOverflow(const char* pszString, GIntBig nVal)
+{
+    if( strlen(pszString) <= 18 )
+        return FALSE;
+    while( *pszString == ' ' )
+        pszString ++;
+    if( *pszString == '+' )
+        pszString ++;
+    char szBuffer[32];
+    sprintf(szBuffer, CPL_FRMT_GIB, nVal);
+    return strcmp(szBuffer, pszString) != 0;
+}
+
+#endif
+
+/************************************************************************/
+/*                          CPLAtoGIntBigEx()                           */
+/************************************************************************/
+
+/**
+ * Convert a string to a 64 bit signed integer.
+ * 
+ * @param pszString String containing 64 bit signed integer.
+ * @param bWarn Issue a warning if an overflow occurs during conversion
+ * @param pbOverflow Pointer to an integer to store if an overflow occured, or NULL
+ * @return 64 bit signed integer.
+ * @since GDAL 2.0
+ */
+
+GIntBig CPLAtoGIntBigEx( const char* pszString, int bWarn, int *pbOverflow )
+{
+    GIntBig nVal;
+    errno = 0;
+#if defined(__MSVCRT__) || (defined(WIN32) && defined(_MSC_VER))
+    nVal = _atoi64( pszString );
+# elif HAVE_ATOLL
+    nVal = atoll( pszString );
+#else
+    nVal = atol( pszString );
+#endif
+    if( errno == ERANGE
+#if defined(__MINGW32__)
+        || CPLAtoGIntBigExHasOverflow(pszString, nVal)
+#endif
+        )
+    {
+        if( pbOverflow ) *pbOverflow = TRUE;
+        if( bWarn )
+        {
+            CPLError(CE_Warning, CPLE_AppDefined,
+                     "64 bit integer overflow when converting %s",
+                     pszString);
+        }
+        while( *pszString == ' ' )
+            pszString ++;
+        return (*pszString == '-' ) ? GINTBIG_MIN : GINTBIG_MAX;
+    }
+    else if( pbOverflow ) *pbOverflow = FALSE;
+    return nVal;
 }
 
 /************************************************************************/
@@ -2218,7 +2306,7 @@ int CPLUnlinkTree( const char *pszPath )
 
 {
 /* -------------------------------------------------------------------- */
-/*      First, ensure there isn't any such file yet.                    */
+/*      First, ensure there is such a file.                             */
 /* -------------------------------------------------------------------- */
     VSIStatBufL sStatBuf;
 
@@ -2356,6 +2444,88 @@ int CPLCopyFile( const char *pszNewPath, const char *pszOldPath )
     CPLFree( pabyBuffer );
 
     return nRet;
+}
+
+/************************************************************************/
+/*                            CPLCopyTree()                             */
+/************************************************************************/
+
+int CPLCopyTree( const char *pszNewPath, const char *pszOldPath )
+
+{
+    VSIStatBufL sStatBuf;
+
+    if( VSIStatL( pszOldPath, &sStatBuf ) != 0 )
+    {
+        CPLError( CE_Failure, CPLE_AppDefined, 
+                  "It seems no file system object called '%s' exists.",
+                  pszOldPath );
+
+        return -1;
+    }
+    if( VSIStatL( pszNewPath, &sStatBuf ) == 0 )
+    {
+        CPLError( CE_Failure, CPLE_AppDefined, 
+                  "It seems that a file system object called '%s' already exists.",
+                  pszNewPath );
+
+        return -1;
+    }
+
+    if( VSI_ISDIR( sStatBuf.st_mode ) )
+    {
+        if( VSIMkdir( pszNewPath, 0755 ) != 0 )
+        {
+            CPLError( CE_Failure, CPLE_AppDefined, 
+                    "Cannot create directory '%s'.",
+                    pszNewPath );
+
+            return -1;
+        }
+
+        char **papszItems = CPLReadDir( pszOldPath );
+        int  i;
+
+        for( i = 0; papszItems != NULL && papszItems[i] != NULL; i++ )
+        {
+            char *pszNewSubPath;
+            char *pszOldSubPath;
+            int nErr;
+
+            if( EQUAL(papszItems[i],".") || EQUAL(papszItems[i],"..") )
+                continue;
+
+            pszNewSubPath = CPLStrdup(
+                CPLFormFilename( pszNewPath, papszItems[i], NULL ) );
+            pszOldSubPath = CPLStrdup(
+                CPLFormFilename( pszOldPath, papszItems[i], NULL ) );
+
+            nErr = CPLCopyTree( pszNewSubPath, pszOldSubPath );
+
+            CPLFree( pszNewSubPath );
+            CPLFree( pszOldSubPath );
+
+            if( nErr != 0 )
+            {
+                CSLDestroy( papszItems );
+                return nErr;
+            }
+        }
+        CSLDestroy( papszItems );
+
+        return 0;
+    }
+    else if( VSI_ISREG( sStatBuf.st_mode ) )
+    {
+        return CPLCopyFile( pszNewPath, pszOldPath );
+    }
+    else
+    {
+        CPLError( CE_Failure, CPLE_AppDefined, 
+                  "Unrecognised filesystem object : '%s'.",
+                  pszOldPath );
+        return -1;
+    }
 }
 
 /************************************************************************/

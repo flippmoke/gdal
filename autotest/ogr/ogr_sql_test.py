@@ -27,7 +27,6 @@
 # Boston, MA 02111-1307, USA.
 ###############################################################################
 
-import os
 import sys
 
 sys.path.append( '../pymod' )
@@ -98,7 +97,7 @@ def ogr_sql_3():
 ###############################################################################
 # Test ORDER BY DESC handling 
 
-def ogr_sql_3():
+def ogr_sql_3_desc():
 
     expect = [169, 168, 166, 165, 158]
     
@@ -508,7 +507,7 @@ def ogr_sql_20():
 def ogr_sql_21():
 
     mem_ds = ogr.GetDriverByName("Memory").CreateDataSource( "my_ds")
-    mem_lyr = mem_ds.CreateLayer( "my_layer")
+    mem_ds.CreateLayer( "my_layer")
 
     sql_lyr = mem_ds.ExecuteSQL("SELECT *, fid from my_layer")
     if sql_lyr.GetLayerDefn().GetFieldCount() != 1:
@@ -691,6 +690,7 @@ def ogr_sql_28():
 
     ds = ogr.GetDriverByName("Memory").CreateDataSource( "my_ds")
     lyr = ds.CreateLayer( "my_layer")
+    lyr.GetLayerDefn().GetGeomFieldDefn(0).SetName('geom') # a bit border line but OK for Memory driver...
     field_defn = ogr.FieldDefn( "strfield", ogr.OFTString )
     lyr.CreateField(field_defn)
     field_defn = ogr.FieldDefn( "intfield", ogr.OFTInteger )
@@ -733,6 +733,7 @@ def ogr_sql_28():
     "SELECT 'strfield' +",
     "SELECT 'strfield' 'strfield'",
     "SELECT CONCAT('strfield')",
+    'SELECT foo(strfield) FROM my_layer', # Undefined function 'foo' used.
     'SELECT strfield, FROM my_layer',
     'SELECT strfield, foo FROM my_layer',
     'SELECT strfield AS FROM my_layer',
@@ -768,6 +769,7 @@ def ogr_sql_28():
     "SELECT * FROM my_layer WHERE strfield = 'a' ORDER BY",
     "SELECT * FROM my_layer WHERE strfield = 'a' ORDER BY foo",
     "SELECT * FROM my_layer WHERE strfield = 'a' ORDER BY strfield UNK",
+    "SELECT * FROM my_layer ORDER BY geom", # Cannot use geometry field 'geom' in a ORDER BY clause
     "SELECT FOO(*) FROM my_layer",
     "SELECT FOO(*) AS bar FROM my_layer",
     "SELECT COUNT",
@@ -827,7 +829,7 @@ def ogr_sql_28():
     "SELECT * FROM my_layer LEFT JOIN foo ON my_layer.strfield = my_layer2.strfield",
     "SELECT * FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield = foo.strfield",
     "SELECT * FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield = my_layer2.foo",
-    "SELECT * FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield != my_layer2.strfield",
+    #"SELECT * FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield != my_layer2.strfield",
     "SELECT *, my_layer2. FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield = my_layer2.strfield",
     "SELECT *, my_layer2.foo FROM my_layer LEFT JOIN my_layer2 ON my_layer.strfield = my_layer2.strfield",
     "SELECT * FROM my_layer UNION" ,
@@ -852,7 +854,6 @@ def ogr_sql_28():
             return 'fail'
 
     ds = None
-    ds2 = None
 
     return 'success'
 
@@ -1055,7 +1056,6 @@ def ogr_sql_35():
     if count_cols == 1024:
         return 'success'
     else:
-        print(val)
         return 'fail'
 
 ###############################################################################
@@ -1068,16 +1068,18 @@ def ogr_sql_36():
     lyr.CreateField(ogr.FieldDefn('intfield', ogr.OFTInteger))
     lyr.CreateField(ogr.FieldDefn('floatfield', ogr.OFTReal))
     lyr.CreateField(ogr.FieldDefn('strfield', ogr.OFTString))
+    lyr.CreateField(ogr.FieldDefn('int64field', ogr.OFTInteger64))
     feat = ogr.Feature(lyr.GetLayerDefn())
     feat.SetField(0, 1)
     feat.SetField(1, 2.3)
     feat.SetField(2, "456")
+    feat.SetField(3, 1234567890123)
     lyr.CreateFeature(feat)
     feat = ogr.Feature(lyr.GetLayerDefn())
     lyr.CreateFeature(feat)
     feat = None
 
-    for fieldname in ['intfield', 'floatfield', 'strfield']:
+    for fieldname in ['intfield', 'int64field', 'floatfield', 'strfield']:
         sql_lyr = ds.ExecuteSQL( "select distinct %s from layer order by %s asc" % (fieldname, fieldname))
         feat = sql_lyr.GetNextFeature()
         if feat.IsFieldSet(0) != 0:
@@ -1093,7 +1095,7 @@ def ogr_sql_36():
             return 'fail'
         ds.ReleaseResultSet( sql_lyr )
 
-    for fieldname in ['intfield', 'floatfield', 'strfield']:
+    for fieldname in ['intfield', 'int64field', 'floatfield', 'strfield']:
         sql_lyr = ds.ExecuteSQL( "select distinct %s from layer order by %s desc" % (fieldname, fieldname))
         feat = sql_lyr.GetNextFeature()
         if feat.IsFieldSet(0) == 0:
@@ -1357,6 +1359,122 @@ def ogr_sql_44():
 
     return 'success'
 
+###############################################################################
+# Test 64 bit GetFeatureCount()
+
+def ogr_sql_45():
+
+    ds = ogr.Open("""<OGRVRTDataSource>
+  <OGRVRTLayer name="poly">
+    <SrcDataSource relativeToVRT="0" shared="1">data/poly.shp</SrcDataSource>
+    <SrcLayer>poly</SrcLayer>
+    <GeometryType>wkbPolygon</GeometryType>
+    <Field name="AREA" type="Real" src="AREA"/>
+    <Field name="EAS_ID" type="Integer" src="EAS_ID"/>
+    <Field name="PRFEDEA" type="Integer" src="PRFEDEA"/>
+    <FeatureCount>1000000000000</FeatureCount>
+  </OGRVRTLayer>
+</OGRVRTDataSource>""")
+    lyr = ds.GetLayer(0)
+
+    if lyr.GetFeatureCount() != 1000000000000:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    sql_lyr = ds.ExecuteSQL('SELECT COUNT(*) FROM poly')
+    f = sql_lyr.GetNextFeature()
+    if f.GetField(0) != 1000000000000:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    ds.ReleaseResultSet(sql_lyr)
+
+    sql_lyr = ds.ExecuteSQL('SELECT COUNT(AREA) FROM poly')
+    if sql_lyr.GetLayerDefn().GetFieldDefn(0).GetType() != ogr.OFTInteger:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = sql_lyr.GetNextFeature()
+    if f.GetField(0) != 10:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    ds.ReleaseResultSet(sql_lyr)
+
+    return 'success'
+
+###############################################################################
+# Test strict SQL quoting
+
+def ogr_sql_46():
+
+    ds = ogr.GetDriverByName('Memory').CreateDataSource('test')
+    lyr = ds.CreateLayer('test')
+    lyr.CreateField(ogr.FieldDefn('id', ogr.OFTInteger))
+    lyr.CreateField(ogr.FieldDefn('from', ogr.OFTString))
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField(0, 1)
+    feat.SetField(1, "not_from")
+    lyr.CreateFeature(feat)
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField(0, 3)
+    feat.SetField(1, "from")
+    lyr.CreateFeature(feat)
+    feat = None
+
+    sql_lyr = ds.ExecuteSQL( "select id, 'id', \"id\" as id2, id as \"id3\", \"from\" from test where \"from\" = 'from'" )
+    feat = sql_lyr.GetNextFeature()
+    if feat.GetField(0) != 3 or feat.GetField(1) != 'id' or feat.GetField(2) != 3 or feat.GetField(3) != 3 or feat.GetField(4) != 'from':
+        gdaltest.post_reason('fail')
+        feat.DumpReadable()
+        return 'fail'
+    feat = sql_lyr.GetNextFeature()
+    if feat is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds.ReleaseResultSet(sql_lyr)
+
+    sql_lyr = ds.ExecuteSQL( "select max(\"id\"), max(id), count(\"id\"), count(id) from \"test\"" )
+    feat = sql_lyr.GetNextFeature()
+    if feat.GetField(0) != 3 or feat.GetField(1) != 3 or feat.GetField(2) != 2 or feat.GetField(3) != 2:
+        gdaltest.post_reason('fail')
+        feat.DumpReable()
+        return 'fail'
+    ds.ReleaseResultSet(sql_lyr)
+
+    # Not accepted
+    gdal.PushErrorHandler()
+    sql_lyr = ds.ExecuteSQL( "select * from 'test'" )
+    gdal.PopErrorHandler()
+    if sql_lyr is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Not accepted
+    gdal.PushErrorHandler()
+    sql_lyr = ds.ExecuteSQL( "select distinct 'id' from 'test'" )
+    gdal.PopErrorHandler()
+    if sql_lyr is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Not accepted
+    gdal.PushErrorHandler()
+    sql_lyr = ds.ExecuteSQL( "select max('id') from 'test'" )
+    gdal.PopErrorHandler()
+    if sql_lyr is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Not accepted
+    gdal.PushErrorHandler()
+    sql_lyr = ds.ExecuteSQL( "select id as 'id2' from 'test'" )
+    gdal.PopErrorHandler()
+    if sql_lyr is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+        
+    return 'success'
+
 def ogr_sql_cleanup():
     gdaltest.lyr = None
     gdaltest.ds.Destroy()
@@ -1369,6 +1487,7 @@ gdaltest_list = [
     ogr_sql_1,
     ogr_sql_2,
     ogr_sql_3,
+    ogr_sql_3_desc,
     ogr_sql_4,
     ogr_sql_5,
     ogr_sql_6,
@@ -1410,6 +1529,8 @@ gdaltest_list = [
     ogr_sql_42,
     ogr_sql_43,
     ogr_sql_44,
+    ogr_sql_45,
+    ogr_sql_46,
     ogr_sql_cleanup ]
 
 if __name__ == '__main__':

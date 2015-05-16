@@ -33,7 +33,6 @@
 import os
 import os.path
 import sys
-import string
 import array
 import shutil
 from osgeo import gdal
@@ -92,7 +91,10 @@ def ecw_1():
             gdaltest.ecw_drv.major_version = int(float(longname[sdk_off+4]))
             sdk_minor_off = longname.find('.', sdk_off)
             if sdk_minor_off >= 0:
-                gdaltest.ecw_drv.minor_version = int(longname[sdk_minor_off+1])
+                if longname[sdk_minor_off+1] == 'x':
+                    gdaltest.ecw_drv.minor_version = 3
+                else:
+                    gdaltest.ecw_drv.minor_version = int(longname[sdk_minor_off+1])
             else:
                 gdaltest.ecw_drv.minor_version = 0
         else:
@@ -1006,8 +1008,8 @@ def ecw_28():
     ds = None
 
     import struct
-    tab1 = struct.unpack('B' * 3, multiband_data)
-    tab2 = struct.unpack('B' * 3, data1 + data2 + data3)
+    struct.unpack('B' * 3, multiband_data)
+    struct.unpack('B' * 3, data1 + data2 + data3)
 
     # Due to the nature of ECW, reading one band or several bands does not give
     # the same results.
@@ -1098,7 +1100,7 @@ def ecw_30():
     data_readblock = ds.GetRasterBand(1).ReadBlock(0,0)
     ds = None
 
-    if data_readraster != data_readraster:
+    if data_readraster != data_readblock:
         return 'fail'
 
     return 'success'
@@ -1308,7 +1310,7 @@ def ecw_34():
     ds.GetRasterBand(1).Fill(65535)
     ref_data = ds.GetRasterBand(1).ReadRaster(0, 0, 128, 128, buf_type = gdal.GDT_UInt16)
     out_ds = gdaltest.ecw_drv.CreateCopy( 'tmp/UInt16_big_out.ecw', ds, options = ['ECW_FORMAT_VERSION=3','TARGET=1'] )
-    out_ds = None
+    del out_ds
     ds = None
 
     ds = gdal.Open( 'tmp/UInt16_big_out.ecw' )
@@ -1336,7 +1338,7 @@ def ecw_35():
     ds.GetRasterBand(1).Fill(65535)
     ref_data = ds.GetRasterBand(1).ReadRaster(0, 0, 128, 128, buf_type = gdal.GDT_UInt16)
     out_ds = gdaltest.jp2ecw_drv.CreateCopy( 'tmp/UInt16_big_out.jp2', ds, options = ['TARGET=1'] )
-    out_ds = None
+    del out_ds
     ds = None
 
     ds = gdal.Open( 'tmp/UInt16_big_out.jp2' )
@@ -1778,6 +1780,7 @@ def ecw_42():
 
 ###############################################################################
 # Test auto-promotion of 1bit alpha band to 8bit
+# Note: only works on reversible files like this one
 
 def ecw_43():
 
@@ -1795,7 +1798,7 @@ def ecw_43():
         return 'fail'
     jp2_bands_data = ds.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
     jp2_fourth_band_data = fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
-    jp2_fourth_band_subsampled_data = fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize,int(ds.RasterXSize/16),int(ds.RasterYSize/16))
+    fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize,int(ds.RasterXSize/16),int(ds.RasterYSize/16))
 
     tmp_ds = gdal.GetDriverByName('GTiff').CreateCopy('/vsimem/ecw_43.tif', ds)
     fourth_band = tmp_ds.GetRasterBand(4)
@@ -1815,6 +1818,12 @@ def ecw_43():
         return 'fail'
 
     if jp2_fourth_band_data != gtiff_fourth_band_data:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    ds = gdal.OpenEx('data/stefan_full_rgba_alpha_1bit.jp2', open_options = ['1BIT_ALPHA_PROMOTION=NO'])
+    fourth_band = ds.GetRasterBand(4)
+    if fourth_band.GetMetadataItem('NBITS', 'IMAGE_STRUCTURE') != '1':
         gdaltest.post_reason('fail')
         return 'fail'
 
@@ -1861,6 +1870,117 @@ def ecw_44():
             return 'fail'
 
     return 'success'
+
+###############################################################################
+# Test metadata reading & writing
+
+def RemoveDriverMetadata(md):
+    if 'COMPRESSION_RATE_TARGET' in md:
+        del md['COMPRESSION_RATE_TARGET']
+    if 'COLORSPACE' in md:
+        del md['COLORSPACE']
+    if 'VERSION' in md:
+        del md['VERSION']
+    return md
+
+def ecw_45():
+    if gdaltest.jp2ecw_drv is None or gdaltest.ecw_write == 0:
+        return 'skip'
+
+    # No metadata
+    src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+    out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = ['WRITE_METADATA=YES'])
+    del out_ds
+    if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = gdal.Open('/vsimem/ecw_45.jp2')
+    md = RemoveDriverMetadata(ds.GetMetadata())
+    if md != {}:
+        gdaltest.post_reason('fail')
+        print(md)
+        return 'fail'
+    gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    # Simple metadata in main domain
+    for options in [ ['WRITE_METADATA=YES'] ]:
+        src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+        src_ds.SetMetadataItem('FOO', 'BAR')
+        out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = options)
+        del out_ds
+        if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+            gdaltest.post_reason('fail')
+            return 'fail'
+        ds = gdal.Open('/vsimem/ecw_45.jp2')
+        md = RemoveDriverMetadata(ds.GetMetadata())
+        if md != {'FOO': 'BAR'}:
+            gdaltest.post_reason('fail')
+            print(md)
+            return 'fail'
+        gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    # Simple metadata in auxiliary domain
+    src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+    src_ds.SetMetadataItem('FOO', 'BAR', 'SOME_DOMAIN')
+    out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = ['WRITE_METADATA=YES'])
+    del out_ds
+    if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = gdal.Open('/vsimem/ecw_45.jp2')
+    md = RemoveDriverMetadata(ds.GetMetadata('SOME_DOMAIN'))
+    if md != {'FOO': 'BAR'}:
+        gdaltest.post_reason('fail')
+        print(md)
+        return 'fail'
+    gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    # Simple metadata in auxiliary XML domain
+    src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+    src_ds.SetMetadata( [ '<some_arbitrary_xml_box/>' ], 'xml:SOME_DOMAIN')
+    out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = ['WRITE_METADATA=YES'])
+    del out_ds
+    if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = gdal.Open('/vsimem/ecw_45.jp2')
+    if ds.GetMetadata('xml:SOME_DOMAIN')[0] != '<some_arbitrary_xml_box />\n':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    # Special xml:BOX_ metadata domain
+    for options in [ ['WRITE_METADATA=YES'] ]:
+        src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+        src_ds.SetMetadata( [ '<some_arbitrary_xml_box/>' ], 'xml:BOX_1')
+        out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = options)
+        del out_ds
+        if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+            gdaltest.post_reason('fail')
+            return 'fail'
+        ds = gdal.Open('/vsimem/ecw_45.jp2')
+        if ds.GetMetadata('xml:BOX_0')[0] != '<some_arbitrary_xml_box/>':
+            gdaltest.post_reason('fail')
+            return 'fail'
+        gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    # Special xml:XMP metadata domain
+    for options in [ ['WRITE_METADATA=YES'] ]:
+        src_ds = gdal.GetDriverByName('MEM').Create('', 2, 2)
+        src_ds.SetMetadata( [ '<fake_xmp_box/>' ], 'xml:XMP')
+        out_ds = gdaltest.jp2ecw_drv.CreateCopy('/vsimem/ecw_45.jp2', src_ds, options = options)
+        del out_ds
+        if gdal.VSIStatL('/vsimem/ecw_45.jp2.aux.xml') is not None:
+            gdaltest.post_reason('fail')
+            return 'fail'
+        ds = gdal.Open('/vsimem/ecw_45.jp2')
+        if ds.GetMetadata('xml:XMP')[0] != '<fake_xmp_box/>':
+            gdaltest.post_reason('fail')
+            return 'fail'
+        gdal.Unlink('/vsimem/ecw_45.jp2')
+
+    return 'success'
+
 ###############################################################################
 def ecw_online_1():
     if gdaltest.jp2ecw_drv is None:
@@ -2186,6 +2306,7 @@ gdaltest_list = [
     ecw_42,
     ecw_43,
     ecw_44,
+    ecw_45,
     ecw_online_1,
     ecw_online_2,
     #JTO this test does not make sense. It tests difference between two files pixel by pixel but compression is lossy# ecw_online_3, 

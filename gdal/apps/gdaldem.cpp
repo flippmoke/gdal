@@ -82,6 +82,7 @@
  *  on the continental slope Marine Geodesy, 2007, 30, 3-35
  ****************************************************************************/
 
+#include "cpl_vsi.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -2635,11 +2636,30 @@ int main( int argc, char ** argv )
     
     // We might actually want to always go through the intermediate dataset
     int bForceUseIntermediateDataset = FALSE;
-    if( EQUAL(pszFormat, "GTiff") &&
-        !EQUAL(CSLFetchNameValueDef(papszCreateOptions, "COMPRESS", "NONE"), "NONE") &&
-        CSLTestBoolean(CSLFetchNameValueDef(papszCreateOptions, "TILED", "NO")) )
+    if( EQUAL(pszFormat, "GTiff") )
     {
-        bForceUseIntermediateDataset = TRUE;
+        if( !EQUAL(CSLFetchNameValueDef(papszCreateOptions, "COMPRESS", "NONE"), "NONE") &&
+            CSLTestBoolean(CSLFetchNameValueDef(papszCreateOptions, "TILED", "NO")) )
+        {
+            bForceUseIntermediateDataset = TRUE;
+        }
+        else if( strcmp(pszDstFilename, "/vsistdout/") == 0 )
+        {
+            bForceUseIntermediateDataset = TRUE;
+            pfnProgress = GDALDummyProgress;
+            bQuiet = TRUE;
+        }
+#ifdef S_ISFIFO
+        else
+        {
+            VSIStatBufL sStat;
+            if( VSIStatExL(pszDstFilename, &sStat, VSI_STAT_EXISTS_FLAG | VSI_STAT_NATURE_FLAG) == 0 &&
+                S_ISFIFO(sStat.st_mode) )
+            {
+                bForceUseIntermediateDataset = TRUE;
+            }
+        }
+#endif
     }
 
     if( GDALGetMetadataItem( hDriver, GDAL_DCAP_RASTER, NULL) != NULL &&

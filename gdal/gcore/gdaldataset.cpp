@@ -38,6 +38,7 @@
 #include "ogr_attrind.h"
 #include "ogr_p.h"
 #include "ogrunionlayer.h"
+#include "ograpispy.h"
 
 #ifdef SQLITE_ENABLED
 #include "../sqlite/ogrsqliteexecutesql.h"
@@ -82,7 +83,7 @@ static CPLHashSet* phSharedDatasetSet = NULL;
 /* if GDALClose is called from a different thread */
 static std::map<GDALDataset*, GIntBig>* poAllDatasetMap = NULL;
 
-static void *hDLMutex = NULL;
+static CPLMutex *hDLMutex = NULL;
 
 /* Static array of all datasets. Used by GDALGetOpenDatasets */
 /* Not thread-safe. See GDALGetOpenDatasets */
@@ -115,7 +116,7 @@ static void GDALSharedDatasetFreeFunc(void* elt)
 /************************************************************************/
 
 /* The open-shared mutex must be used by the ProxyPool too */
-void** GDALGetphDLMutex()
+CPLMutex** GDALGetphDLMutex()
 {
     return &hDLMutex;
 }
@@ -177,6 +178,9 @@ GDALDataset::GDALDataset()
     nRefCount = 1;
     bShared = FALSE;
     bIsInternal = TRUE;
+    bSuppressOnClose = FALSE;
+    bReserved1 = FALSE;
+    bReserved2 = FALSE;
     papszOpenOptions = NULL;
 
 /* -------------------------------------------------------------------- */
@@ -227,6 +231,9 @@ GDALDataset::~GDALDataset()
             CPLDebug( "GDAL", 
                       "GDALClose(%s, this=%p)", GetDescription(), this );
     }
+
+    if( bSuppressOnClose )
+        VSIUnlink(GetDescription());
 
 /* -------------------------------------------------------------------- */
 /*      Remove dataset from the "open" dataset list.                    */
@@ -1520,19 +1527,25 @@ CPLErr GDALDataset::IRasterIO( GDALRWFlag eRWFlag,
 
         pabyBandData = ((GByte *) pData) + iBandIndex * nBandSpace;
 
-        psExtraArg->pfnProgress = GDALScaledProgress;
-        psExtraArg->pProgressData = 
-            GDALCreateScaledProgress( 1.0 * iBandIndex / nBandCount,
-                                      1.0 * (iBandIndex + 1) / nBandCount,
-                                      pfnProgressGlobal,
-                                      pProgressDataGlobal );
+        if( nBandCount > 1 )
+        {
+            psExtraArg->pfnProgress = GDALScaledProgress;
+            psExtraArg->pProgressData = 
+                GDALCreateScaledProgress( 1.0 * iBandIndex / nBandCount,
+                                        1.0 * (iBandIndex + 1) / nBandCount,
+                                        pfnProgressGlobal,
+                                        pProgressDataGlobal );
+            if( psExtraArg->pProgressData == NULL )
+                psExtraArg->pfnProgress = NULL;
+        }
 
         eErr = poBand->IRasterIO( eRWFlag, nXOff, nYOff, nXSize, nYSize, 
                                   (void *) pabyBandData, nBufXSize, nBufYSize,
                                   eBufType, nPixelSpace, nLineSpace,
                                   psExtraArg );
 
-        GDALDestroyScaledProgress( psExtraArg->pProgressData );
+        if( nBandCount > 1 )
+            GDALDestroyScaledProgress( psExtraArg->pProgressData );
     }
     
     psExtraArg->pfnProgress = pfnProgressGlobal;
@@ -1638,7 +1651,8 @@ CPLErr GDALDataset::ValidateRasterIOOrAdviseReadParameters(
  * on "block boundaries" as returned by GetBlockSize(), or use the
  * ReadBlock() and WriteBlock() methods.
  *
- * This method is the same as the C GDALDatasetRasterIO() function.
+ * This method is the same as the C GDALDatasetRasterIO() or
+ * GDALDatasetRasterIOEx() functions.
  *
  * @param eRWFlag Either GF_Read to read a region of data, or GF_Write to
  * write a region of data.
@@ -1829,6 +1843,9 @@ CPLErr GDALDataset::RasterIO( GDALRWFlag eRWFlag,
 
 /**
  * \brief Read/write a region of image data from multiple bands.
+ *
+ * Use GDALDatasetRasterIOEx() if 64 bit spacings or extra arguments (resampling
+ * resolution, progress callback, etc. are needed)
  *
  * @see GDALDataset::RasterIO()
  */
@@ -2157,7 +2174,8 @@ char **GDALDataset::GetFileList()
 /* -------------------------------------------------------------------- */
 /*      Do we have a world file?                                        */
 /* -------------------------------------------------------------------- */
-    if( bMainFileReal )
+    if( bMainFileReal &&
+        !GDALCanFileAcceptSidecarFile(osMainFilename) )
     {
         const char* pszExtension = CPLGetExtension( osMainFilename );
         if( strlen(pszExtension) > 2 )
@@ -2405,6 +2423,10 @@ GDALOpen( const char * pszFilename, GDALAccess eAccess )
  * OVERVIEW_LEVEL=level, to select a particular overview level of a dataset.
  * The level index starts at 0. The level number can be suffixed by "only" to specify that
  * only this overview level must be visible, and not sub-levels.
+ * Open options are validated by default, and a warning is emitted in case the
+ * option is not recognized. In some scenarios, it might be not desirable (e.g.
+ * when not knowing which driver will open the file), so the special open option
+ * VALIDATE_OPEN_OPTIONS can be set to NO to avoid such warnings.
  *
  * @param papszSiblingFiles  NULL, or a NULL terminated list of strings that are
  * filenames that are auxiliary to the main filename. If NULL is passed, a probing
@@ -2533,7 +2555,9 @@ GDALDatasetH CPL_STDCALL GDALOpenEx( const char* pszFilename,
         }
 
         if( poDriver->pfnIdentify && poDriver->pfnIdentify(&oOpenInfo) > 0 )
+        {
             GDALValidateOpenOptions( poDriver, oOpenInfo.papszOpenOptions );
+        }
 
         if ( poDriver->pfnOpen != NULL )
         {
@@ -2732,19 +2756,6 @@ void CPL_STDCALL GDALClose( GDALDatasetH hDS )
         return;
 
     GDALDataset *poDS = (GDALDataset *) hDS;
-    if( poDS->bIsInternal )
-    {
-        if (poDS->GetShared())
-        {
-            if( poDS->Dereference() > 0 )
-                return;
-        }
-        delete poDS;
-        return;
-    }
-        
-    CPLMutexHolderD( &hDLMutex );
-    //CPLLocaleC  oLocaleForcer;
 
     if (poDS->GetShared())
     {
@@ -3148,6 +3159,9 @@ void GDALDatasetReleaseResultSet( GDALDatasetH hDS, OGRLayerH hLayer )
   <li> <b>ODsCDeleteLayer</b>: True if this datasource can delete existing layers.<p>
   <li> <b>ODsCCreateGeomFieldAfterCreateLayer</b>: True if the layers of this
         datasource support CreateGeomField() just after layer creation.<p>
+  <li> <b>ODsCCurveGeometries</b>: True if this datasource supports curve geometries.<p>
+  <li> <b>ODsCTransactions</b>: True if this datasource supports (efficient) transactions.<p>
+  <li> <b>ODsCEmulatedTransactions</b>: True if this datasource supports transactions through emulation.<p>
  </ul>
 
  The \#define macro forms of the capability names should be used in preference
@@ -3695,7 +3709,7 @@ In GDAL 1.X, this method used to be in the OGRDataSource class.
 int GDALDataset::GetSummaryRefCount() const
 
 {
-    CPLMutexHolderD( (void **) &m_hMutex );
+    CPLMutexHolderD( (CPLMutex**) &m_hMutex );
     int nSummaryCount = nRefCount;
     int iLayer;
     GDALDataset *poUseThis = (GDALDataset *) this;
@@ -3910,7 +3924,7 @@ OGRLayer *GDALDataset::CopyLayer( OGRLayer *poSrcLayer,
         if( poDstFeature->SetFrom( poFeature, panMap, TRUE ) != OGRERR_NONE )
         {
             CPLError( CE_Failure, CPLE_AppDefined,
-                      "Unable to translate feature %ld from layer %s.\n",
+                      "Unable to translate feature " CPL_FRMT_GIB " from layer %s.\n",
                       poFeature->GetFID(), poSrcDefn->GetName() );
             OGRFeature::DestroyFeature( poFeature );
             CPLFree(panMap);
@@ -3961,7 +3975,7 @@ OGRLayer *GDALDataset::CopyLayer( OGRLayer *poSrcLayer,
             if( papoDstFeature[nFeatCount]->SetFrom( poFeature, panMap, TRUE ) != OGRERR_NONE )
             {
                 CPLError( CE_Failure, CPLE_AppDefined,
-                          "Unable to translate feature %ld from layer %s.\n",
+                          "Unable to translate feature " CPL_FRMT_GIB " from layer %s.\n",
                           poFeature->GetFID(), poSrcDefn->GetName() );
                 OGRFeature::DestroyFeature( poFeature );
                 bStopTransfer = TRUE;
@@ -4882,6 +4896,15 @@ OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
                                       const char *pszDialect )
 
 {
+    return ExecuteSQL(pszStatement, poSpatialFilter, pszDialect, NULL);
+}
+
+OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
+                                    OGRGeometry *poSpatialFilter,
+                                    const char *pszDialect,
+                                    swq_select_parse_options* poSelectParseOptions)
+
+{
     swq_select *psSelectInfo = NULL;
 
     if( pszDialect != NULL && EQUAL(pszDialect, "SQLite") )
@@ -4970,7 +4993,11 @@ OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
 /*      Preparse the SQL statement.                                     */
 /* -------------------------------------------------------------------- */
     psSelectInfo = new swq_select();
-    if( psSelectInfo->preparse( pszStatement ) != CPLE_None )
+    swq_custom_func_registrar* poCustomFuncRegistrar = NULL;
+    if( poSelectParseOptions != NULL )
+        poCustomFuncRegistrar = poSelectParseOptions->poCustomFuncRegistrar;
+    if( psSelectInfo->preparse( pszStatement,
+                                poCustomFuncRegistrar != NULL ) != CPLE_None )
     {
         delete psSelectInfo;
         return NULL;
@@ -4983,7 +5010,8 @@ OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
     {
         return BuildLayerFromSelectInfo(psSelectInfo,
                                         poSpatialFilter,
-                                        pszDialect);
+                                        pszDialect,
+                                        poSelectParseOptions);
     }
 
 /* -------------------------------------------------------------------- */
@@ -4999,7 +5027,8 @@ OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
 
         OGRLayer* poLayer = BuildLayerFromSelectInfo(psSelectInfo,
                                                      poSpatialFilter,
-                                                     pszDialect);
+                                                     pszDialect,
+                                                     poSelectParseOptions);
         if( poLayer == NULL )
         {
             /* Each source layer owns an independant select info */
@@ -5034,27 +5063,82 @@ OGRLayer * GDALDataset::ExecuteSQL( const char *pszStatement,
 /*                        BuildLayerFromSelectInfo()                    */
 /************************************************************************/
 
-OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
-                                                  OGRGeometry *poSpatialFilter,
-                                                  const char *pszDialect)
+struct GDALSQLParseInfo
 {
-    swq_select* psSelectInfo = (swq_select*) psSelectInfoIn;
-
     swq_field_list sFieldList;
-    int            nFIDIndex = 0;
-    OGRGenSQLResultsLayer *poResults = NULL;
-    char *pszWHERE = NULL;
+    int            nExtraDSCount;
+    GDALDataset**  papoExtraDS;
+    char          *pszWHERE;
+};
 
-    memset( &sFieldList, 0, sizeof(sFieldList) );
+OGRLayer* GDALDataset::BuildLayerFromSelectInfo(swq_select* psSelectInfo,
+                                                OGRGeometry *poSpatialFilter,
+                                                const char *pszDialect,
+                                                swq_select_parse_options* poSelectParseOptions)
+{
+    OGRGenSQLResultsLayer *poResults = NULL;
+    GDALSQLParseInfo* psParseInfo = BuildParseInfo(psSelectInfo,
+                                                   poSelectParseOptions);
+
+    if( psParseInfo )
+    {
+        poResults = new OGRGenSQLResultsLayer( this, psSelectInfo,
+                                               poSpatialFilter,
+                                               psParseInfo->pszWHERE,
+                                               pszDialect );
+    }
+    else
+    {
+        delete psSelectInfo;
+    }
+    DestroyParseInfo(psParseInfo);
+
+    return poResults;
+}
+
+/************************************************************************/
+/*                             DestroyParseInfo()                       */
+/************************************************************************/
+
+void GDALDataset::DestroyParseInfo(GDALSQLParseInfo* psParseInfo )
+{
+    if( psParseInfo != NULL )
+    {
+        CPLFree( psParseInfo->sFieldList.names );
+        CPLFree( psParseInfo->sFieldList.types );
+        CPLFree( psParseInfo->sFieldList.table_ids );
+        CPLFree( psParseInfo->sFieldList.ids );
+
+        /* Release the datasets we have opened with OGROpenShared() */
+        /* It is safe to do that as the 'new OGRGenSQLResultsLayer' itself */
+        /* has taken a reference on them, which it will release in its */
+        /* destructor */
+        for(int iEDS = 0; iEDS < psParseInfo->nExtraDSCount; iEDS++)
+            GDALClose( (GDALDatasetH)psParseInfo->papoExtraDS[iEDS] );
+        CPLFree(psParseInfo->papoExtraDS);
+
+        CPLFree(psParseInfo->pszWHERE);
+
+        CPLFree(psParseInfo);
+    }
+}
+
+/************************************************************************/
+/*                            BuildParseInfo()                          */
+/************************************************************************/
+
+GDALSQLParseInfo* GDALDataset::BuildParseInfo(swq_select* psSelectInfo,
+                                              swq_select_parse_options* poSelectParseOptions)
+{
+    int            nFIDIndex = 0;
+
+    GDALSQLParseInfo* psParseInfo = (GDALSQLParseInfo*)CPLCalloc(1, sizeof(GDALSQLParseInfo));
 
 /* -------------------------------------------------------------------- */
 /*      Validate that all the source tables are recognised, count       */
 /*      fields.                                                         */
 /* -------------------------------------------------------------------- */
     int  nFieldCount = 0, iTable, iField;
-    int  iEDS;
-    int  nExtraDSCount = 0;
-    GDALDataset** papoExtraDS = NULL;
 
     for( iTable = 0; iTable < psSelectInfo->table_count; iTable++ )
     {
@@ -5074,14 +5158,15 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
                               "`%s' required by JOIN.",
                               psTableDef->data_source );
 
-                delete psSelectInfo;
-                goto end;
+                DestroyParseInfo(psParseInfo);
+                return NULL;
             }
 
             /* Keep in an array to release at the end of this function */
-            papoExtraDS = (GDALDataset** )CPLRealloc(papoExtraDS,
-                               sizeof(GDALDataset*) * (nExtraDSCount + 1));
-            papoExtraDS[nExtraDSCount++] = poTableDS;
+            psParseInfo->papoExtraDS = (GDALDataset** )CPLRealloc(
+                               psParseInfo->papoExtraDS,
+                               sizeof(GDALDataset*) * (psParseInfo->nExtraDSCount + 1));
+            psParseInfo->papoExtraDS[psParseInfo->nExtraDSCount++] = poTableDS;
         }
 
         poSrcLayer = poTableDS->GetLayerByName( psTableDef->table_name );
@@ -5091,12 +5176,14 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
             CPLError( CE_Failure, CPLE_AppDefined, 
                       "SELECT from table %s failed, no such table/featureclass.",
                       psTableDef->table_name );
-            delete psSelectInfo;
-            goto end;
+
+            DestroyParseInfo(psParseInfo);
+            return NULL;
         }
 
         nFieldCount += poSrcLayer->GetLayerDefn()->GetFieldCount();
-        if( iTable == 0 )
+        if( iTable == 0 || (poSelectParseOptions &&
+                            poSelectParseOptions->bAddSecondaryTablesGeometryFields) )
             nFieldCount += poSrcLayer->GetLayerDefn()->GetGeomFieldCount();
     }
     
@@ -5104,16 +5191,16 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
 /*      Build the field list for all indicated tables.                  */
 /* -------------------------------------------------------------------- */
 
-    sFieldList.table_count = psSelectInfo->table_count;
-    sFieldList.table_defs = psSelectInfo->table_defs;
+    psParseInfo->sFieldList.table_count = psSelectInfo->table_count;
+    psParseInfo->sFieldList.table_defs = psSelectInfo->table_defs;
 
-    sFieldList.count = 0;
-    sFieldList.names = (char **) CPLMalloc( sizeof(char *) * (nFieldCount+SPECIAL_FIELD_COUNT) );
-    sFieldList.types = (swq_field_type *)  
+    psParseInfo->sFieldList.count = 0;
+    psParseInfo->sFieldList.names = (char **) CPLMalloc( sizeof(char *) * (nFieldCount+SPECIAL_FIELD_COUNT) );
+    psParseInfo->sFieldList.types = (swq_field_type *)  
         CPLMalloc( sizeof(swq_field_type) * (nFieldCount+SPECIAL_FIELD_COUNT) );
-    sFieldList.table_ids = (int *) 
+    psParseInfo->sFieldList.table_ids = (int *) 
         CPLMalloc( sizeof(int) * (nFieldCount+SPECIAL_FIELD_COUNT) );
-    sFieldList.ids = (int *) 
+    psParseInfo->sFieldList.ids = (int *) 
         CPLMalloc( sizeof(int) * (nFieldCount+SPECIAL_FIELD_COUNT) );
     
     for( iTable = 0; iTable < psSelectInfo->table_count; iTable++ )
@@ -5137,49 +5224,57 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
              iField++ )
         {
             OGRFieldDefn *poFDefn=poSrcLayer->GetLayerDefn()->GetFieldDefn(iField);
-            int iOutField = sFieldList.count++;
-            sFieldList.names[iOutField] = (char *) poFDefn->GetNameRef();
+            int iOutField = psParseInfo->sFieldList.count++;
+            psParseInfo->sFieldList.names[iOutField] = (char *) poFDefn->GetNameRef();
             if( poFDefn->GetType() == OFTInteger )
             {
                 if( poFDefn->GetSubType() == OFSTBoolean )
-                    sFieldList.types[iOutField] = SWQ_BOOLEAN;
+                    psParseInfo->sFieldList.types[iOutField] = SWQ_BOOLEAN;
                 else
-                    sFieldList.types[iOutField] = SWQ_INTEGER;
+                    psParseInfo->sFieldList.types[iOutField] = SWQ_INTEGER;
+            }
+            else if( poFDefn->GetType() == OFTInteger64 )
+            {
+                if( poFDefn->GetSubType() == OFSTBoolean )
+                    psParseInfo->sFieldList.types[iOutField] = SWQ_BOOLEAN;
+                else
+                    psParseInfo->sFieldList.types[iOutField] = SWQ_INTEGER64;
             }
             else if( poFDefn->GetType() == OFTReal )
-                sFieldList.types[iOutField] = SWQ_FLOAT;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_FLOAT;
             else if( poFDefn->GetType() == OFTString )
-                sFieldList.types[iOutField] = SWQ_STRING;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_STRING;
             else if( poFDefn->GetType() == OFTTime )
-                sFieldList.types[iOutField] = SWQ_TIME;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_TIME;
             else if( poFDefn->GetType() == OFTDate )
-                sFieldList.types[iOutField] = SWQ_DATE;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_DATE;
             else if( poFDefn->GetType() == OFTDateTime )
-                sFieldList.types[iOutField] = SWQ_TIMESTAMP;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_TIMESTAMP;
             else
-                sFieldList.types[iOutField] = SWQ_OTHER;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_OTHER;
 
-            sFieldList.table_ids[iOutField] = iTable;
-            sFieldList.ids[iOutField] = iField;
+            psParseInfo->sFieldList.table_ids[iOutField] = iTable;
+            psParseInfo->sFieldList.ids[iOutField] = iField;
         }
 
-        if( iTable == 0 )
+        if( iTable == 0 || (poSelectParseOptions &&
+                            poSelectParseOptions->bAddSecondaryTablesGeometryFields) )
         {
-            nFIDIndex = sFieldList.count;
+            nFIDIndex = psParseInfo->sFieldList.count;
 
             for( iField = 0; 
                  iField < poSrcLayer->GetLayerDefn()->GetGeomFieldCount();
                  iField++ )
             {
                 OGRGeomFieldDefn *poFDefn=poSrcLayer->GetLayerDefn()->GetGeomFieldDefn(iField);
-                int iOutField = sFieldList.count++;
-                sFieldList.names[iOutField] = (char *) poFDefn->GetNameRef();
-                if( *sFieldList.names[iOutField] == '\0' )
-                    sFieldList.names[iOutField] = (char*) OGR_GEOMETRY_DEFAULT_NON_EMPTY_NAME;
-                sFieldList.types[iOutField] = SWQ_GEOMETRY;
+                int iOutField = psParseInfo->sFieldList.count++;
+                psParseInfo->sFieldList.names[iOutField] = (char *) poFDefn->GetNameRef();
+                if( *psParseInfo->sFieldList.names[iOutField] == '\0' )
+                    psParseInfo->sFieldList.names[iOutField] = (char*) OGR_GEOMETRY_DEFAULT_NON_EMPTY_NAME;
+                psParseInfo->sFieldList.types[iOutField] = SWQ_GEOMETRY;
 
-                sFieldList.table_ids[iOutField] = iTable;
-                sFieldList.ids[iOutField] =
+                psParseInfo->sFieldList.table_ids[iOutField] = iTable;
+                psParseInfo->sFieldList.ids[iOutField] =
                     GEOM_FIELD_INDEX_TO_ALL_FIELD_INDEX(poSrcLayer->GetLayerDefn(), iField);
             }
         }
@@ -5188,28 +5283,31 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
 /* -------------------------------------------------------------------- */
 /*      Expand '*' in 'SELECT *' now before we add the pseudo fields    */
 /* -------------------------------------------------------------------- */
-    if( psSelectInfo->expand_wildcard( &sFieldList )  != CE_None )
+    int bAlwaysPrefixWithTableName = poSelectParseOptions &&
+                                     poSelectParseOptions->bAlwaysPrefixWithTableName;
+    if( psSelectInfo->expand_wildcard( &psParseInfo->sFieldList,
+                                       bAlwaysPrefixWithTableName)  != CE_None )
     {
-        delete psSelectInfo;
-        goto end;
+        DestroyParseInfo(psParseInfo);
+        return NULL;
     }
 
     for (iField = 0; iField < SPECIAL_FIELD_COUNT; iField++)
     {
-        sFieldList.names[sFieldList.count] = (char*) SpecialFieldNames[iField];
-        sFieldList.types[sFieldList.count] = SpecialFieldTypes[iField];
-        sFieldList.table_ids[sFieldList.count] = 0;
-        sFieldList.ids[sFieldList.count] = nFIDIndex + iField;
-        sFieldList.count++;
+        psParseInfo->sFieldList.names[psParseInfo->sFieldList.count] = (char*) SpecialFieldNames[iField];
+        psParseInfo->sFieldList.types[psParseInfo->sFieldList.count] = SpecialFieldTypes[iField];
+        psParseInfo->sFieldList.table_ids[psParseInfo->sFieldList.count] = 0;
+        psParseInfo->sFieldList.ids[psParseInfo->sFieldList.count] = nFIDIndex + iField;
+        psParseInfo->sFieldList.count++;
     }
     
 /* -------------------------------------------------------------------- */
 /*      Finish the parse operation.                                     */
 /* -------------------------------------------------------------------- */
-    if( psSelectInfo->parse( &sFieldList, 0 ) != CE_None )
+    if( psSelectInfo->parse( &psParseInfo->sFieldList, poSelectParseOptions ) != CE_None )
     {
-        delete psSelectInfo;
-        goto end;
+        DestroyParseInfo(psParseInfo);
+        return NULL;
     }
 
 /* -------------------------------------------------------------------- */
@@ -5217,42 +5315,11 @@ OGRLayer* GDALDataset::BuildLayerFromSelectInfo(void* psSelectInfoIn,
 /* -------------------------------------------------------------------- */
     if( psSelectInfo->where_expr != NULL )
     {
-        if (EQUAL(GetDriverName(), "PostgreSQL") ||
-                EQUAL(GetDriverName(), "FileGDB" ) )
-            pszWHERE = psSelectInfo->where_expr->Unparse( &sFieldList, '"' );
-        else
-            pszWHERE = psSelectInfo->where_expr->Unparse( &sFieldList, '\'' );
+        psParseInfo->pszWHERE = psSelectInfo->where_expr->Unparse( &psParseInfo->sFieldList, '"' );
         //CPLDebug( "OGR", "Unparse() -> %s", pszWHERE );
     }
 
-/* -------------------------------------------------------------------- */
-/*      Everything seems OK, try to instantiate a results layer.        */
-/* -------------------------------------------------------------------- */
-
-    poResults = new OGRGenSQLResultsLayer( this, psSelectInfo,
-                                           poSpatialFilter,
-                                           pszWHERE,
-                                           pszDialect );
-
-    CPLFree( pszWHERE );
-
-    // Eventually, we should keep track of layers to cleanup.
-
-end:
-    CPLFree( sFieldList.names );
-    CPLFree( sFieldList.types );
-    CPLFree( sFieldList.table_ids );
-    CPLFree( sFieldList.ids );
-
-    /* Release the datasets we have opened with OGROpenShared() */
-    /* It is safe to do that as the 'new OGRGenSQLResultsLayer' itself */
-    /* has taken a reference on them, which it will release in its */
-    /* destructor */
-    for(iEDS = 0; iEDS < nExtraDSCount; iEDS++)
-        GDALClose( (GDALDatasetH)papoExtraDS[iEDS] );
-    CPLFree(papoExtraDS);
-
-    return poResults;
+    return psParseInfo;
 }
 
 /************************************************************************/
@@ -5413,7 +5480,6 @@ OGRLayer* GDALDataset::GetLayer(CPL_UNUSED int iLayer)
 /*                            TestCapability()                          */
 /************************************************************************/
 
-
 /**
  \brief Test if capability is available.
 
@@ -5426,6 +5492,9 @@ OGRLayer* GDALDataset::GetLayer(CPL_UNUSED int iLayer)
   <li> <b>ODsCDeleteLayer</b>: True if this datasource can delete existing layers.<p>
   <li> <b>ODsCCreateGeomFieldAfterCreateLayer</b>: True if the layers of this
         datasource support CreateGeomField() just after layer creation.<p>
+  <li> <b>ODsCCurveGeometries</b>: True if this datasource supports curve geometries.<p>
+  <li> <b>ODsCTransactions</b>: True if this datasource supports (efficient) transactions.<p>
+  <li> <b>ODsCEmulatedTransactions</b>: True if this datasource supports transactions through emulation.<p>
  </ul>
 
  The \#define macro forms of the capability names should be used in preference
@@ -5445,4 +5514,214 @@ OGRLayer* GDALDataset::GetLayer(CPL_UNUSED int iLayer)
 int GDALDataset::TestCapability( CPL_UNUSED const char * pszCap )
 {
     return FALSE;
+}
+
+/************************************************************************/
+/*                           StartTransaction()                         */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, StartTransaction creates a transaction.
+
+ If starting the transaction fails, will return 
+ OGRERR_FAILURE. Datasources which do not support transactions will 
+ always return OGRERR_UNSUPPORTED_OPERATION.
+
+ Nested transactions are not supported.
+ 
+ All changes done after the start of the transaction are definitely applied in the
+ datasource if CommitTransaction() is called. They may be cancelled by calling
+ RollbackTransaction() instead.
+ 
+ At the time of writing, transactions only apply on vector layers.
+ 
+ Datasets that support transactions will advertize the ODsCTransactions capability.
+ Use of transactions at dataset level is generally prefered to transactions at
+ layer level, whose scope is rarely limited to the layer from which it was started.
+ 
+ In case StartTransaction() fails, neither CommitTransaction() or RollbackTransaction()
+ should be called.
+ 
+ If an error occurs after a successful StartTransaction(), the whole
+ transaction may or may not be implicitely cancelled, depending on drivers. (e.g.
+ the PG driver will cancel it, SQLite/GPKG not). In any case, in the event of an
+ error, an explicit call to RollbackTransaction() should be done to keep things balanced.
+ 
+ By default, when bForce is set to FALSE, only "efficient" transactions will be
+ attempted. Some drivers may offer an emulation of transactions, but sometimes
+ with significant overhead, in which case the user must explicitely allow for such
+ an emulation by setting bForce to TRUE. Drivers that offer emulated transactions
+ should advertize the ODsCEmulatedTransactions capability (and not ODsCTransactions).
+ 
+ This function is the same as the C function GDALDatasetStartTransaction().
+
+ @param bForce can be set to TRUE if an emulation, possibly slow, of a transaction
+               mechanism is acceptable.
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDataset::StartTransaction(CPL_UNUSED int bForce)
+{
+    return OGRERR_UNSUPPORTED_OPERATION;
+}
+
+/************************************************************************/
+/*                      GDALDatasetStartTransaction()                   */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, StartTransaction creates a transaction.
+
+ If starting the transaction fails, will return 
+ OGRERR_FAILURE. Datasources which do not support transactions will 
+ always return OGRERR_UNSUPPORTED_OPERATION.
+
+ Nested transactions are not supported.
+ 
+ All changes done after the start of the transaction are definitely applied in the
+ datasource if CommitTransaction() is called. They may be cancelled by calling
+ RollbackTransaction() instead.
+ 
+ At the time of writing, transactions only apply on vector layers.
+ 
+ Datasets that support transactions will advertize the ODsCTransactions capability.
+ Use of transactions at dataset level is generally prefered to transactions at
+ layer level, whose scope is rarely limited to the layer from which it was started.
+ 
+ In case StartTransaction() fails, neither CommitTransaction() or RollbackTransaction()
+ should be called.
+
+ If an error occurs after a successful StartTransaction(), the whole
+ transaction may or may not be implicitely cancelled, depending on drivers. (e.g.
+ the PG driver will cancel it, SQLite/GPKG not). In any case, in the event of an
+ error, an explicit call to RollbackTransaction() should be done to keep things balanced.
+
+ By default, when bForce is set to FALSE, only "efficient" transactions will be
+ attempted. Some drivers may offer an emulation of transactions, but sometimes
+ with significant overhead, in which case the user must explicitely allow for such
+ an emulation by setting bForce to TRUE. Drivers that offer emulated transactions
+ should advertize the ODsCEmulatedTransactions capability (and not ODsCTransactions).
+
+ This function is the same as the C++ method GDALDataset::StartTransaction()
+
+ @param hDS the dataset handle.
+ @param bForce can be set to TRUE if an emulation, possibly slow, of a transaction
+               mechanism is acceptable.
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDatasetStartTransaction(GDALDatasetH hDS, int bForce)
+{
+    VALIDATE_POINTER1( hDS, "GDALDatasetStartTransaction", OGRERR_INVALID_HANDLE );
+
+#ifdef OGRAPISPY_ENABLED
+    if( bOGRAPISpyEnabled )
+        OGRAPISpy_Dataset_StartTransaction(hDS, bForce);
+#endif
+
+    return ((GDALDataset*) hDS)->StartTransaction(bForce);
+}
+
+/************************************************************************/
+/*                           CommitTransaction()                        */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, CommitTransaction commits a transaction.
+
+ If no transaction is active, or the commit fails, will return 
+ OGRERR_FAILURE. Datasources which do not support transactions will 
+ always return OGRERR_UNSUPPORTED_OPERATION. 
+ 
+ Depending on drivers, this may or may not abort layer sequential readings that
+ are active.
+
+ This function is the same as the C function GDALDatasetCommitTransaction().
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDataset::CommitTransaction()
+{
+    return OGRERR_UNSUPPORTED_OPERATION;
+}
+
+/************************************************************************/
+/*                        GDALDatasetCommitTransaction()                */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, CommitTransaction commits a transaction.
+
+ If no transaction is active, or the commit fails, will return 
+ OGRERR_FAILURE. Datasources which do not support transactions will 
+ always return OGRERR_UNSUPPORTED_OPERATION. 
+ 
+ Depending on drivers, this may or may not abort layer sequential readings that
+ are active.
+
+ This function is the same as the C++ method GDALDataset::CommitTransaction()
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDatasetCommitTransaction(GDALDatasetH hDS)
+{
+    VALIDATE_POINTER1( hDS, "GDALDatasetCommitTransaction", OGRERR_INVALID_HANDLE );
+
+#ifdef OGRAPISPY_ENABLED
+    if( bOGRAPISpyEnabled )
+        OGRAPISpy_Dataset_CommitTransaction(hDS);
+#endif
+
+    return ((GDALDataset*) hDS)->CommitTransaction();
+}
+
+/************************************************************************/
+/*                           RollbackTransaction()                      */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, RollbackTransaction will roll back a datasource to its state before the start of the current transaction. 
+ If no transaction is active, or the rollback fails, will return  
+ OGRERR_FAILURE. Datasources which do not support transactions will
+ always return OGRERR_UNSUPPORTED_OPERATION. 
+
+ This function is the same as the C function GDALDatasetRollbackTransaction().
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDataset::RollbackTransaction()
+{
+    return OGRERR_UNSUPPORTED_OPERATION;
+}
+
+/************************************************************************/
+/*                     GDALDatasetRollbackTransaction()                 */
+/************************************************************************/
+
+/**
+ \brief For datasources which support transactions, RollbackTransaction will roll back a datasource to its state before the start of the current transaction. 
+ If no transaction is active, or the rollback fails, will return  
+ OGRERR_FAILURE. Datasources which do not support transactions will
+ always return OGRERR_UNSUPPORTED_OPERATION. 
+
+ This function is the same as the C++ method GDALDataset::RollbackTransaction().
+
+ @return OGRERR_NONE on success.
+ @since GDAL 2.0
+*/
+OGRErr GDALDatasetRollbackTransaction(GDALDatasetH hDS)
+{
+    VALIDATE_POINTER1( hDS, "GDALDatasetRollbackTransaction", OGRERR_INVALID_HANDLE );
+
+#ifdef OGRAPISPY_ENABLED
+    if( bOGRAPISpyEnabled )
+        OGRAPISpy_Dataset_RollbackTransaction(hDS);
+#endif
+
+    return ((GDALDataset*) hDS)->RollbackTransaction();
 }

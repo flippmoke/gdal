@@ -36,6 +36,12 @@
 
 class OGRMSSQLSpatialDataSource;
 
+/* layer status */
+#define MSSQLLAYERSTATUS_ORIGINAL  0
+#define MSSQLLAYERSTATUS_INITIAL 1
+#define MSSQLLAYERSTATUS_CREATED 2
+#define MSSQLLAYERSTATUS_DISABLED 3
+
 /* geometry format to transfer geometry column */
 #define MSSQLGEOMETRY_NATIVE 0
 #define MSSQLGEOMETRY_WKB 1
@@ -139,7 +145,7 @@ class OGRMSSQLSpatialLayer : public OGRLayer
     OGRSpatialReference *poSRS;
     int                 nSRSId;
 
-    int                 iNextShapeId;
+    GIntBig             iNextShapeId;
 
     OGRMSSQLSpatialDataSource    *poDS;
 
@@ -148,6 +154,8 @@ class OGRMSSQLSpatialLayer : public OGRLayer
     char               *pszFIDColumn;
 
     int                bIsIdentityFid;
+
+    int                nLayerStatus;
 
     int                *panFieldOrdinals;
 
@@ -164,7 +172,7 @@ class OGRMSSQLSpatialLayer : public OGRLayer
     virtual OGRFeature *GetNextRawFeature();
     virtual OGRFeature *GetNextFeature();
 
-    virtual OGRFeature *GetFeature( long nFeatureId );
+    virtual OGRFeature *GetFeature( GIntBig nFeatureId );
     
     virtual OGRFeatureDefn *GetLayerDefn() { return poFeatureDefn; }
 
@@ -179,6 +187,9 @@ class OGRMSSQLSpatialLayer : public OGRLayer
 
     virtual int         TestCapability( const char * );
     char*               GByteArrayToHexString( const GByte* pabyData, int nLen);
+
+    void               SetLayerStatus( int nStatus ) { nLayerStatus = nStatus; }
+    int                GetLayerStatus() { return nLayerStatus; }
 };
 
 /************************************************************************/
@@ -225,7 +236,7 @@ class OGRMSSQLSpatialTableLayer : public OGRMSSQLSpatialLayer
     void                DropSpatialIndex();
 
     virtual void        ResetReading();
-    virtual int         GetFeatureCount( int );
+    virtual GIntBig     GetFeatureCount( int );
 
     virtual OGRFeatureDefn *GetLayerDefn();
 
@@ -234,7 +245,7 @@ class OGRMSSQLSpatialTableLayer : public OGRMSSQLSpatialLayer
     virtual OGRErr      SetAttributeFilter( const char * );
 
     virtual OGRErr      ISetFeature( OGRFeature *poFeature );
-    virtual OGRErr      DeleteFeature( long nFID );
+    virtual OGRErr      DeleteFeature( GIntBig nFID );
     virtual OGRErr      ICreateFeature( OGRFeature *poFeature );
 
     const char*         GetTableName() { return pszTableName; }
@@ -244,7 +255,7 @@ class OGRMSSQLSpatialTableLayer : public OGRMSSQLSpatialLayer
     virtual OGRErr      CreateField( OGRFieldDefn *poField,
                                      int bApproxOK = TRUE );
    
-    virtual OGRFeature *GetFeature( long nFeatureId );
+    virtual OGRFeature *GetFeature( GIntBig nFeatureId );
 
     virtual int         TestCapability( const char * );
 
@@ -281,9 +292,9 @@ class OGRMSSQLSpatialSelectLayer : public OGRMSSQLSpatialLayer
                         ~OGRMSSQLSpatialSelectLayer();
 
     virtual void        ResetReading();
-    virtual int         GetFeatureCount( int );
+    virtual GIntBig     GetFeatureCount( int );
 
-    virtual OGRFeature *GetFeature( long nFeatureId );
+    virtual OGRFeature *GetFeature( GIntBig nFeatureId );
     
     virtual OGRErr      GetExtent(OGREnvelope *psExtent, int bForce = TRUE);
 
@@ -359,6 +370,10 @@ class OGRMSSQLSpatialDataSource : public OGRDataSource
 
     OGRSpatialReference* FetchSRS( int nId );
     int                 FetchSRSId( OGRSpatialReference * poSRS );
+
+    OGRErr              StartTransaction(CPL_UNUSED int bForce);
+    OGRErr              CommitTransaction();
+    OGRErr              RollbackTransaction();
 
     // Internal use
     CPLODBCSession     *GetSession() { return &oSession; }

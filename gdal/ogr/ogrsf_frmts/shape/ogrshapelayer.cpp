@@ -138,7 +138,7 @@ OGRShapeLayer::OGRShapeLayer( OGRShapeDataSource* poDSIn,
     
     const char* pszShapeEncoding = NULL;
     pszShapeEncoding = CSLFetchNameValue(poDS->GetOpenOptions(), "ENCODING");
-    if( pszShapeEncoding == NULL )
+    if( pszShapeEncoding == NULL && osEncoding == "")
         pszShapeEncoding = CSLFetchNameValue( papszCreateOptions, "ENCODING" );
     if( pszShapeEncoding == NULL )
         pszShapeEncoding = CPLGetConfigOption( "SHAPE_ENCODING", NULL );
@@ -157,7 +157,8 @@ OGRShapeLayer::OGRShapeLayer( OGRShapeDataSource* poDSIn,
     }
 
     poFeatureDefn = SHPReadOGRFeatureDefn( CPLGetBasename(pszFullName),
-                                           hSHP, hDBF, osEncoding );
+                                           hSHP, hDBF, osEncoding,
+               CSLFetchBoolean(poDS->GetOpenOptions(), "ADJUST_TYPE", FALSE) );
 
     /* To make sure that GetLayerDefn()->GetGeomFieldDefn(0)->GetSpatialRef() == GetSpatialRef() */
     OGRwkbGeometryType eGeomType = poFeatureDefn->GetGeomType();
@@ -171,6 +172,7 @@ OGRShapeLayer::OGRShapeLayer( OGRShapeDataSource* poDSIn,
     else if( bSRSSetIn && poSRSIn != NULL )
         poSRSIn->Release();
     SetDescription( poFeatureDefn->GetName() );
+    bRewindOnWrite = CSLTestBoolean(CPLGetConfigOption( "SHAPE_REWIND_ON_WRITE", "YES" ));
 }
 
 /************************************************************************/
@@ -507,10 +509,10 @@ int OGRShapeLayer::ScanIndices()
         {
             int i;
 
-            panMatchingFIDs = (long *)
-                CPLMalloc(sizeof(long) * (nSpatialFIDCount+1) );
+            panMatchingFIDs = (GIntBig *)
+                CPLMalloc(sizeof(GIntBig) * (nSpatialFIDCount+1) );
             for( i = 0; i < nSpatialFIDCount; i++ )
-                panMatchingFIDs[i] = (long) panSpatialFIDs[i];
+                panMatchingFIDs[i] = (GIntBig) panSpatialFIDs[i];
             panMatchingFIDs[nSpatialFIDCount] = OGRNullFID;
         }
 
@@ -644,13 +646,13 @@ OGRErr OGRShapeLayer::SetAttributeFilter( const char * pszAttributeFilter )
 /*      ourselves in it.                                                */
 /************************************************************************/
 
-OGRErr OGRShapeLayer::SetNextByIndex( long nIndex )
+OGRErr OGRShapeLayer::SetNextByIndex( GIntBig nIndex )
 
 {
     if (!TouchLayer())
         return OGRERR_FAILURE;
 
-    if( nIndex < 0 )
+    if( nIndex < 0 || nIndex > INT_MAX )
         return OGRERR_FAILURE;
 
     // Eventually we should try to use panMatchingFIDs list 
@@ -658,7 +660,7 @@ OGRErr OGRShapeLayer::SetNextByIndex( long nIndex )
     if( m_poFilterGeom != NULL || m_poAttrQuery != NULL )
         return OGRLayer::SetNextByIndex( nIndex );
 
-    iNextShapeId = nIndex;
+    iNextShapeId = (int)nIndex;
 
     return OGRERR_NONE;
 }
@@ -760,7 +762,7 @@ OGRFeature *OGRShapeLayer::GetNextFeature()
             
             // Check the shape object's geometry, and if it matches
             // any spatial filter, return it.  
-            poFeature = FetchShape(panMatchingFIDs[iMatchingFID] /*, &oShapeExtent*/);
+            poFeature = FetchShape((int)panMatchingFIDs[iMatchingFID] /*, &oShapeExtent*/);
             
             iMatchingFID++;
 
@@ -812,14 +814,14 @@ OGRFeature *OGRShapeLayer::GetNextFeature()
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *OGRShapeLayer::GetFeature( long nFeatureId )
+OGRFeature *OGRShapeLayer::GetFeature( GIntBig nFeatureId )
 
 {
-    if (!TouchLayer())
+    if (!TouchLayer() || nFeatureId > INT_MAX )
         return NULL;
 
     OGRFeature *poFeature = NULL;
-    poFeature = SHPReadOGRFeature( hSHP, hDBF, poFeatureDefn, nFeatureId, NULL,
+    poFeature = SHPReadOGRFeature( hSHP, hDBF, poFeatureDefn, (int)nFeatureId, NULL,
                                    osEncoding );
 
     if( poFeature != NULL )
@@ -858,15 +860,12 @@ OGRErr OGRShapeLayer::ISetFeature( OGRFeature *poFeature )
         return OGRERR_FAILURE;
     }
 
-    long nFID = poFeature->GetFID();
+    GIntBig nFID = poFeature->GetFID();
     if( nFID < 0
         || (hSHP != NULL && nFID >= hSHP->nRecords)
         || (hDBF != NULL && nFID >= hDBF->nRecords) )
     {
-        CPLError( CE_Failure, CPLE_AppDefined,
-                  "Attempt to set shape with feature id (%ld) which does "
-                  "not exist.", nFID );
-        return OGRERR_FAILURE;
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
     bHeaderDirty = TRUE;
@@ -882,7 +881,8 @@ OGRErr OGRShapeLayer::ISetFeature( OGRFeature *poFeature )
     }
 
     OGRErr eErr = SHPWriteOGRFeature( hSHP, hDBF, poFeatureDefn, poFeature,
-                               osEncoding, &bTruncationWarningEmitted );
+                                      osEncoding, &bTruncationWarningEmitted,
+                                      bRewindOnWrite );
 
     if( hSHP != NULL )
     {
@@ -900,10 +900,10 @@ OGRErr OGRShapeLayer::ISetFeature( OGRFeature *poFeature )
 /*                           DeleteFeature()                            */
 /************************************************************************/
 
-OGRErr OGRShapeLayer::DeleteFeature( long nFID )
+OGRErr OGRShapeLayer::DeleteFeature( GIntBig nFID )
 
 {
-    if (!TouchLayer())
+    if (!TouchLayer() || nFID > INT_MAX )
         return OGRERR_FAILURE;
 
     if( !bUpdateAccess )
@@ -918,10 +918,7 @@ OGRErr OGRShapeLayer::DeleteFeature( long nFID )
         || (hSHP != NULL && nFID >= hSHP->nRecords)
         || (hDBF != NULL && nFID >= hDBF->nRecords) )
     {
-        CPLError( CE_Failure, CPLE_AppDefined, 
-                  "Attempt to delete shape with feature id (%ld) which does "
-                  "not exist.", nFID );
-        return OGRERR_FAILURE;
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
     if( !hDBF )
@@ -933,15 +930,12 @@ OGRErr OGRShapeLayer::DeleteFeature( long nFID )
         return OGRERR_FAILURE;
     }
 
-    if( DBFIsRecordDeleted( hDBF, nFID ) )
+    if( DBFIsRecordDeleted( hDBF, (int)nFID ) )
     {
-        CPLError( CE_Failure, CPLE_AppDefined, 
-                  "Attempt to delete shape with feature id (%ld), but it is marked deleted already.",
-                  nFID );
-        return OGRERR_FAILURE;
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
-    if( !DBFMarkRecordDeleted( hDBF, nFID, TRUE ) )
+    if( !DBFMarkRecordDeleted( hDBF, (int)nFID, TRUE ) )
         return OGRERR_FAILURE;
 
     bHeaderDirty = TRUE;
@@ -1048,7 +1042,8 @@ OGRErr OGRShapeLayer::ICreateFeature( OGRFeature *poFeature )
     }
     
     eErr = SHPWriteOGRFeature( hSHP, hDBF, poFeatureDefn, poFeature, 
-                               osEncoding, &bTruncationWarningEmitted );
+                               osEncoding, &bTruncationWarningEmitted,
+                               bRewindOnWrite );
 
     if( hSHP != NULL )
         nTotalShapeCount = hSHP->nRecords;
@@ -1100,7 +1095,7 @@ int OGRShapeLayer::GetFeatureCountWithSpatialFilterOnly()
 
         if( panMatchingFIDs != NULL )
         {
-            iShape = panMatchingFIDs[iLocalMatchingFID];
+            iShape = (int)panMatchingFIDs[iLocalMatchingFID];
             if( iShape == OGRNullFID )
                 break;
             iLocalMatchingFID++;
@@ -1270,7 +1265,7 @@ int OGRShapeLayer::GetFeatureCountWithSpatialFilterOnly()
 /*                          GetFeatureCount()                           */
 /************************************************************************/
 
-int OGRShapeLayer::GetFeatureCount( int bForce )
+GIntBig OGRShapeLayer::GetFeatureCount( int bForce )
 
 {
     /* Check if the spatial filter is non-trivial */
@@ -1317,7 +1312,7 @@ int OGRShapeLayer::GetFeatureCount( int bForce )
         if (!AttributeFilterEvaluationNeedsGeometry())
             poFeatureDefn->SetGeometryIgnored(TRUE);
 
-        int nRet = OGRLayer::GetFeatureCount( bForce );
+        GIntBig nRet = OGRLayer::GetFeatureCount( bForce );
 
         poFeatureDefn->SetGeometryIgnored(bSaveGeometryIgnored);
         return nRet;
@@ -1619,7 +1614,13 @@ OGRErr OGRShapeLayer::CreateField( OGRFieldDefn *poFieldDefn, int bApproxOK )
         case OFTInteger:
             chType = 'N';
             nWidth = oModFieldDefn.GetWidth();
-            if (nWidth == 0) nWidth = 10;
+            if (nWidth == 0) nWidth = 9;
+            break;
+
+        case OFTInteger64:
+            chType = 'N';
+            nWidth = oModFieldDefn.GetWidth();
+            if (nWidth == 0) nWidth = 18;
             break;
 
         case OFTReal:
@@ -1820,7 +1821,11 @@ OGRErr OGRShapeLayer::AlterFieldDefn( int iField, OGRFieldDefn* poNewFieldDefn, 
     if ((nFlags & ALTER_TYPE_FLAG) &&
         poNewFieldDefn->GetType() != poFieldDefn->GetType())
     {
-        if (poNewFieldDefn->GetType() != OFTString)
+        if (poNewFieldDefn->GetType() == OFTInteger64 && poFieldDefn->GetType() == OFTInteger )
+        {
+            eType = poNewFieldDefn->GetType();
+        }
+        else if (poNewFieldDefn->GetType() != OFTString)
         {
             CPLError( CE_Failure, CPLE_NotSupported,
                       "Can only convert to OFTString");
@@ -2324,10 +2329,12 @@ OGRErr OGRShapeLayer::Repack()
 /* -------------------------------------------------------------------- */
 /*      Create a new dbf file, matching the old.                        */
 /* -------------------------------------------------------------------- */
-    int bMustReopenDBF = ( hDBF != NULL );
+    int bMustReopenDBF = FALSE;
 
     if( hDBF != NULL && nDeleteCount > 0 )
     {
+        bMustReopenDBF = TRUE;
+
         CPLString oTempFile(CPLFormFilename(osDirname, osBasename, NULL));
         oTempFile += "_packed.dbf";
 
@@ -2564,7 +2571,8 @@ OGRErr OGRShapeLayer::ResizeDBF()
     for( i = 0; i < poFeatureDefn->GetFieldCount(); i++ )
     {
         if( poFeatureDefn->GetFieldDefn(i)->GetType() == OFTString ||
-            poFeatureDefn->GetFieldDefn(i)->GetType() == OFTInteger )
+            poFeatureDefn->GetFieldDefn(i)->GetType() == OFTInteger ||
+            poFeatureDefn->GetFieldDefn(i)->GetType() == OFTInteger64 )
         {
             panColMap[nStringCols] = i;
             panBestWidth[nStringCols] = 1;

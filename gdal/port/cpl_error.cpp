@@ -45,7 +45,7 @@
 
 CPL_CVSID("$Id$");
 
-static void *hErrorMutex = NULL;
+static CPLMutex *hErrorMutex = NULL;
 static void *pErrorHandlerUserData = NULL; 
 static CPLErrorHandler pfnErrorHandler = CPLDefaultErrorHandler;
 
@@ -255,7 +255,7 @@ void    CPLErrorV(CPLErr eErrClass, int err_no, const char *fmt, va_list args )
     }
 
 /* -------------------------------------------------------------------- */
-/*      If the user provided his own error handling function, then      */
+/*      If the user provided an handling function, then                 */
 /*      call it, otherwise print the error to stderr and return.        */
 /* -------------------------------------------------------------------- */
     psCtx->nLastErrNo = err_no;
@@ -738,7 +738,7 @@ void CPL_STDCALL CPLLoggingErrorHandler( CPLErr eErrClass, int nError,
                 else
                 {
                     size_t pos = 0;
-                    char *cpl_log_base = strdup(cpl_log);
+                    char *cpl_log_base = CPLStrdup(cpl_log);
                     pos = strcspn(cpl_log_base, ".");
                     if (pos > 0)
                     {
@@ -746,7 +746,7 @@ void CPL_STDCALL CPLLoggingErrorHandler( CPLErr eErrClass, int nError,
                     }
                     CPLsprintf( pszPath, "%s_%d%s", cpl_log_base,
                              i++, ".log" );
-                    free(cpl_log_base);
+                    CPLFree(cpl_log_base);
                 }
             }
 
@@ -836,7 +836,7 @@ CPLSetErrorHandlerEx( CPLErrorHandler pfnErrorHandlerNew,
 /**
  * Install custom error handler.
  *
- * Allow the library's user to specify his own error handler function.
+ * Allow the library's user to specify an error handler function.
  * A valid error handler is a C function with the following prototype:
  *
  * <pre>

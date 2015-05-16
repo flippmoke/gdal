@@ -193,40 +193,52 @@ if (0) {
 }
 
 {
+    BEGIN { $SIG{'__WARN__'} = sub { warn $_[0] if $DOWARN } }
     my $r = Geo::GDAL::RasterAttributeTable->new;
     my @t = $r->FieldTypes;
     my @u = $r->FieldUsages;
+    my %colors = (Red=>1, Green=>1, Blue=>1, Alpha=>1);
+    my @types;
+    my @usages;
     for my $u (@u) {
 	for my $t (@t) {
 	    $r->CreateColumn("$t $u", $t, $u);
+            push @types, $t;
+            push @usages, $u;
 	}
     }
     my $n = $r->GetColumnCount;
     my $n2 = @t * @u;
     ok($n == $n2, "create rat column");
-    $r->SetRowCount(scalar(@t));
+    $r->SetRowCount(1);
     my $i = 0;
-    my $c = 0;
-    for (@t) {
-	if (/Integer/) {
-	    my $v = $r->Value($i, $c, 12);
-	    ok($v == 12, "rat int");
-	} elsif (/Real/) {
-	    my $v = $r->Value($i, $c, 1.23);
-	    ok($v == 1.23, "rat int");
-	} elsif (/String/) {
-	    my $v = $r->Value($i, $c, "abc");
-	    ok($v eq 'abc', "rat str");
-	}
-	$i++;
-	$c++;
+    for my $c (0..$n-1) {
+        my $usage = $r->GetUsageOfCol($c);
+        ok($usage eq $usages[$c], "usage $usage eq $usages[$c]");
+        my $type = $r->GetTypeOfCol($c);
+        if ($colors{$usage}) {
+            ok($type eq 'Integer', "type $type eq 'Integer'");
+        } else {
+            ok($type eq $types[$c], "type $type eq $types[$c]");
+        }
+        for ($type) {
+            if (/Integer/) {
+                my $v = $r->Value($i, $c, 12);
+                ok($v == 12, "rat int ($i,$c): $v vs 12");
+            } elsif (/Real/) {
+                my $v = $r->Value($i, $c, 1.23);
+                ok($v == 1.23, "rat real ($i,$c): $v vs 1.23");
+            } elsif (/String/) {
+                my $v = $r->Value($i, $c, "abc");
+                ok($v eq 'abc', "rat str ($i,$c): $v vs 'abc'");
+            }
+        }
     }
 }
 
 gdal_tests();
 
-$src = Geo::OSR::SpatialReference->new();
-$src->ImportFromEPSG(2392);
+$src = Geo::OSR::SpatialReference->new(EPSG => 2392);
 
 $xml = $src->ExportToXML();
 $a = Geo::GDAL::ParseXMLString($xml);
@@ -236,10 +248,10 @@ ok(is_deeply($a, $b), "xml parsing");
 
 my @tmp = sort keys %available_driver;
 
-print STDERR "\nGDAL version: ",Geo::GDAL::VersionInfo,"\n";
-print STDERR "Unexpected failures:\n",@fails,"\n" if @fails;
-print STDERR "Available drivers were ",join(', ',@tmp),"\n";
-print STDERR "Drivers used in tests were: ",join(', ',@tested_drivers),"\n";
+#print STDERR "\nGDAL version: ",Geo::GDAL::VersionInfo,"\n";
+#print STDERR "Unexpected failures:\n",@fails,"\n" if @fails;
+#print STDERR "Available drivers were ",join(', ',@tmp),"\n";
+#print STDERR "Drivers used in tests were: ",join(', ',@tested_drivers),"\n";
 
 system "rm -rf tmp_ds_*" unless $^O eq 'MSWin32';
 
@@ -290,6 +302,8 @@ sub gdal_tests {
 	    mytest('skipped: does not work?',undef,$name,'dataset create');
 	    next;
 	}
+
+        next unless $driver->{ShortName} eq 'MEM';
 
 	push @tested_drivers,$name;
 	
@@ -362,8 +376,7 @@ sub gdal_tests {
 		
 	    } else 
 	    {
-		#my $colortable = Geo::GDAL::ColorTable->create('RGB');
-		my $colortable = Geo::GDAL::ColorTable->new($Geo::GDAL::Constc::GPI_Gray);
+		my $colortable = Geo::GDAL::ColorTable->new('Gray');
 		my @rgba = (255,0,0,255);
 		$colortable->SetColorEntry(0, \@rgba);
 		$band->ColorTable($colortable);
@@ -414,10 +427,10 @@ sub gdal_tests {
 		my $c = $dataset->GetGCPCount();
 		my $p = $dataset->GetGCPProjection();
 		my $gcps = $dataset->GetGCPs();
-		my $y1 = $gcps->[0]->{GCPY};
-		my $y2 = $gcps->[1]->{GCPY};
-		my $y1o = $gcps[0]->{GCPY};
-		my $y2o = $gcps[1]->{GCPY};
+		my $y1 = $gcps->[0]->{Y};
+		my $y2 = $gcps->[1]->{Y};
+		my $y1o = $gcps[0]->{Y};
+		my $y2o = $gcps[1]->{Y};
 		mytest(($c == 2 and $p eq $po and $y1 == $y1o and $y2 == $y2o),
 		       "$c != 2 or $p ne $po or $y1 != $y1o or $y2 != $y2o",$name,$type,'Set/GetGCPs');
 	    }

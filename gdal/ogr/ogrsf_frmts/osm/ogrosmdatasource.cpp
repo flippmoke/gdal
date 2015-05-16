@@ -88,7 +88,7 @@
 #define PAGE_SIZE   4096
 
 /* compressSize should not be greater than 512, so COMPRESS_SIZE_TO_BYTE() fits on a byte */
-#define COMPRESS_SIZE_TO_BYTE(nCompressSize)  (((nCompressSize) - 8) / 2)
+#define COMPRESS_SIZE_TO_BYTE(nCompressSize)  (GByte)(((nCompressSize) - 8) / 2)
 #define ROUND_COMPRESS_SIZE(nCompressSize)    (((nCompressSize) + 1) / 2) * 2;
 #define COMPRESS_SIZE_FROM_BYTE(byte_on_size) ((byte_on_size) * 2 + 8)
 
@@ -131,7 +131,7 @@ class DSToBeOpened
         CPLString               osInterestLayers;
 };
 
-static void                      *hMutex = NULL;
+static CPLMutex                  *hMutex = NULL;
 static std::vector<DSToBeOpened>  oListDSToBeOpened;
 
 /************************************************************************/
@@ -432,7 +432,7 @@ void OGROSMDataSource::CloseDB()
     }
 
     if( bInTransaction )
-        CommitTransaction();
+        CommitTransactionCacheDB();
 
     sqlite3_close(hDB);
     hDB = NULL;
@@ -1053,8 +1053,8 @@ static int DecompressSector(GByte* pabyIn, int nSectorSize, GByte* pabyOut)
         {
             if( bLastValid )
             {
-                pasLonLatOut[i].nLon = nLastLon + ReadVarSInt64(&pabyPtr);
-                pasLonLatOut[i].nLat = nLastLat + ReadVarSInt64(&pabyPtr);
+                pasLonLatOut[i].nLon = (int)(nLastLon + ReadVarSInt64(&pabyPtr));
+                pasLonLatOut[i].nLat = (int)(nLastLat + ReadVarSInt64(&pabyPtr));
             }
             else
             {
@@ -1556,8 +1556,8 @@ int OGROSMDataSource::UncompressWay( int nBytes, GByte* pabyCompressedWay,
     int nPoints = 1;
     do
     {
-        pasCoords[nPoints].nLon = pasCoords[nPoints-1].nLon + ReadVarSInt64(&pabyPtr);
-        pasCoords[nPoints].nLat = pasCoords[nPoints-1].nLat + ReadVarSInt64(&pabyPtr);
+        pasCoords[nPoints].nLon = (int)(pasCoords[nPoints-1].nLon + ReadVarSInt64(&pabyPtr));
+        pasCoords[nPoints].nLat = (int)(pasCoords[nPoints-1].nLat + ReadVarSInt64(&pabyPtr));
 
         nPoints ++;
     } while (pabyPtr < pabyCompressedWay + nBytes);
@@ -1929,18 +1929,16 @@ void OGROSMDataSource::NotifyWay (OSMWay* psWay)
                     psWay->sInfo.ts.nTimeStamp;
             else
             {
-                int year, month, day, hour, minute, TZ;
-                float second;
-                if (OGRParseXMLDateTime(psWay->sInfo.ts.pszTimeStamp, &year, &month, &day,
-                                        &hour, &minute, &second, &TZ))
+                OGRField sField;
+                if (OGRParseXMLDateTime(psWay->sInfo.ts.pszTimeStamp, &sField))
                 {
                     struct tm brokendown;
-                    brokendown.tm_year = year - 1900;
-                    brokendown.tm_mon = month - 1;
-                    brokendown.tm_mday = day;
-                    brokendown.tm_hour = hour;
-                    brokendown.tm_min = minute;
-                    brokendown.tm_sec = (int)(second + .5);
+                    brokendown.tm_year = sField.Date.Year - 1900;
+                    brokendown.tm_mon = sField.Date.Month - 1;
+                    brokendown.tm_mday = sField.Date.Day;
+                    brokendown.tm_hour = sField.Date.Hour;
+                    brokendown.tm_min = sField.Date.Minute;
+                    brokendown.tm_sec = (int)(sField.Date.Second + .5);
                     psWayFeaturePairs->sInfo.ts.nTimeStamp =
                         CPLYMDHMSToUnixTime(&brokendown);
                 }
@@ -2013,7 +2011,7 @@ void OGROSMDataSource::NotifyWay (OSMWay* psWay)
                 psKD = oIterK->second;
             psKD->nOccurences ++;
 
-            pasAccumulatedTags[nAccumulatedTags].nKeyIndex = psKD->nKeyIndex;
+            pasAccumulatedTags[nAccumulatedTags].nKeyIndex = (short)psKD->nKeyIndex;
 
             /* to fit in 2 bytes, the theoretical limit would be 127 * 128 + 127 */
             if( psKD->asValues.size() < 1024 )
@@ -3005,7 +3003,7 @@ int OGROSMDataSource::SetDBOptions()
     if( !SetCacheSize() )
         return FALSE;
 
-    if( !StartTransaction() )
+    if( !StartTransactionCacheDB() )
         return FALSE;
 
     return TRUE;
@@ -3178,10 +3176,10 @@ int OGROSMDataSource::CreatePreparedStatements()
 }
 
 /************************************************************************/
-/*                           StartTransaction()                         */
+/*                      StartTransactionCacheDB()                       */
 /************************************************************************/
 
-int OGROSMDataSource::StartTransaction()
+int OGROSMDataSource::StartTransactionCacheDB()
 {
     if( bInTransaction )
         return FALSE;
@@ -3202,10 +3200,10 @@ int OGROSMDataSource::StartTransaction()
 }
 
 /************************************************************************/
-/*                           CommitTransaction()                        */
+/*                        CommitTransactionCacheDB()                    */
 /************************************************************************/
 
-int OGROSMDataSource::CommitTransaction()
+int OGROSMDataSource::CommitTransactionCacheDB()
 {
     if( !bInTransaction )
         return FALSE;
@@ -3478,6 +3476,8 @@ int OGROSMDataSource::ParseConf()
                  OGRFieldType eType = OFTString;
                 if( EQUAL(pszType, "Integer") )
                     eType = OFTInteger;
+                else if( EQUAL(pszType, "Integer64") )
+                    eType = OFTInteger64;
                 else if( EQUAL(pszType, "Real") )
                     eType = OFTReal;
                 else if( EQUAL(pszType, "String") )
@@ -4044,7 +4044,7 @@ class OGROSMResultLayerDecorator : public OGRLayerDecorator
                                         osDSName(osDSName),
                                         osInterestLayers(osInterestLayers) {}
 
-        virtual int         GetFeatureCount( int bForce = TRUE )
+        virtual GIntBig     GetFeatureCount( int bForce = TRUE )
         {
             /* When we run GetFeatureCount() with SQLite SQL dialect, */
             /* the OSM dataset will be re-opened. Make sure that it is */

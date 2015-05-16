@@ -402,15 +402,15 @@ class Driver(MajorObject):
         return _gdal.Driver_CreateCopy(self, *args, **kwargs)
 
     def Delete(self, *args):
-        """Delete(self, char utf8_path) -> int"""
+        """Delete(self, char utf8_path) -> CPLErr"""
         return _gdal.Driver_Delete(self, *args)
 
     def Rename(self, *args):
-        """Rename(self, char newName, char oldName) -> int"""
+        """Rename(self, char newName, char oldName) -> CPLErr"""
         return _gdal.Driver_Rename(self, *args)
 
     def CopyFiles(self, *args):
-        """CopyFiles(self, char newName, char oldName) -> int"""
+        """CopyFiles(self, char newName, char oldName) -> CPLErr"""
         return _gdal.Driver_CopyFiles(self, *args)
 
     def Register(self, *args):
@@ -575,62 +575,6 @@ def GDAL_GCP_Id_get(*args):
 def GDAL_GCP_Id_set(*args):
   """GDAL_GCP_Id_set(GCP gcp, char pszId)"""
   return _gdal.GDAL_GCP_Id_set(*args)
-
-def GDAL_GCP_get_GCPX(*args):
-  """GDAL_GCP_get_GCPX(GCP gcp) -> double"""
-  return _gdal.GDAL_GCP_get_GCPX(*args)
-
-def GDAL_GCP_set_GCPX(*args):
-  """GDAL_GCP_set_GCPX(GCP gcp, double dfGCPX)"""
-  return _gdal.GDAL_GCP_set_GCPX(*args)
-
-def GDAL_GCP_get_GCPY(*args):
-  """GDAL_GCP_get_GCPY(GCP gcp) -> double"""
-  return _gdal.GDAL_GCP_get_GCPY(*args)
-
-def GDAL_GCP_set_GCPY(*args):
-  """GDAL_GCP_set_GCPY(GCP gcp, double dfGCPY)"""
-  return _gdal.GDAL_GCP_set_GCPY(*args)
-
-def GDAL_GCP_get_GCPZ(*args):
-  """GDAL_GCP_get_GCPZ(GCP gcp) -> double"""
-  return _gdal.GDAL_GCP_get_GCPZ(*args)
-
-def GDAL_GCP_set_GCPZ(*args):
-  """GDAL_GCP_set_GCPZ(GCP gcp, double dfGCPZ)"""
-  return _gdal.GDAL_GCP_set_GCPZ(*args)
-
-def GDAL_GCP_get_GCPPixel(*args):
-  """GDAL_GCP_get_GCPPixel(GCP gcp) -> double"""
-  return _gdal.GDAL_GCP_get_GCPPixel(*args)
-
-def GDAL_GCP_set_GCPPixel(*args):
-  """GDAL_GCP_set_GCPPixel(GCP gcp, double dfGCPPixel)"""
-  return _gdal.GDAL_GCP_set_GCPPixel(*args)
-
-def GDAL_GCP_get_GCPLine(*args):
-  """GDAL_GCP_get_GCPLine(GCP gcp) -> double"""
-  return _gdal.GDAL_GCP_get_GCPLine(*args)
-
-def GDAL_GCP_set_GCPLine(*args):
-  """GDAL_GCP_set_GCPLine(GCP gcp, double dfGCPLine)"""
-  return _gdal.GDAL_GCP_set_GCPLine(*args)
-
-def GDAL_GCP_get_Info(*args):
-  """GDAL_GCP_get_Info(GCP gcp) -> char"""
-  return _gdal.GDAL_GCP_get_Info(*args)
-
-def GDAL_GCP_set_Info(*args):
-  """GDAL_GCP_set_Info(GCP gcp, char pszInfo)"""
-  return _gdal.GDAL_GCP_set_Info(*args)
-
-def GDAL_GCP_get_Id(*args):
-  """GDAL_GCP_get_Id(GCP gcp) -> char"""
-  return _gdal.GDAL_GCP_get_Id(*args)
-
-def GDAL_GCP_set_Id(*args):
-  """GDAL_GCP_set_Id(GCP gcp, char pszId)"""
-  return _gdal.GDAL_GCP_set_Id(*args)
 
 def GCPsToGeoTransform(*args):
   """GCPsToGeoTransform(int nGCPs, int bApproxOK = 1) -> RETURN_NONE"""
@@ -861,6 +805,18 @@ class Dataset(MajorObject):
         """SetStyleTable(self, StyleTable table)"""
         return _gdal.Dataset_SetStyleTable(self, *args)
 
+    def StartTransaction(self, *args, **kwargs):
+        """StartTransaction(self, int force = True) -> OGRErr"""
+        return _gdal.Dataset_StartTransaction(self, *args, **kwargs)
+
+    def CommitTransaction(self, *args):
+        """CommitTransaction(self) -> OGRErr"""
+        return _gdal.Dataset_CommitTransaction(self, *args)
+
+    def RollbackTransaction(self, *args):
+        """RollbackTransaction(self) -> OGRErr"""
+        return _gdal.Dataset_RollbackTransaction(self, *args)
+
     def ReadRaster1(self, *args, **kwargs):
         """
         ReadRaster1(self, int xoff, int yoff, int xsize, int ysize, int buf_xsize = None, 
@@ -874,11 +830,16 @@ class Dataset(MajorObject):
         return _gdal.Dataset_ReadRaster1(self, *args, **kwargs)
 
     def ReadAsArray(self, xoff=0, yoff=0, xsize=None, ysize=None, buf_obj=None,
+                    buf_xsize = None, buf_ysize = None, buf_type = None,
                     resample_alg = GRIORA_NearestNeighbour,
                     callback = None,
                     callback_data = None):
+        """ Reading a chunk of a GDAL band into a numpy array. The optional (buf_xsize,buf_ysize,buf_type)
+        parameters should generally not be specified if buf_obj is specified. The array is returned"""
+
         import gdalnumeric
         return gdalnumeric.DatasetReadAsArray( self, xoff, yoff, xsize, ysize, buf_obj,
+                                               buf_xsize, buf_ysize, buf_type,
                                                resample_alg = resample_alg,
                                                callback = callback,
                                                callback_data = callback_data )
@@ -1248,7 +1209,7 @@ class Band(MajorObject):
     def GetDefaultHistogram(self, *args, **kwargs):
         """
         GetDefaultHistogram(self, double min_ret = None, double max_ret = None, int buckets_ret = None, 
-            int ppanHistogram = None, 
+            GUIntBig ppanHistogram = None, 
             int force = 1, GDALProgressFunc callback = None, 
             void callback_data = None) -> CPLErr
         """
@@ -1324,15 +1285,18 @@ class Band(MajorObject):
                                       resample_alg, callback, callback_data)
 
     def ReadAsArray(self, xoff=0, yoff=0, win_xsize=None, win_ysize=None,
-                    buf_xsize=None, buf_ysize=None, buf_obj=None,
+                    buf_xsize=None, buf_ysize=None, buf_type=None, buf_obj=None,
                     resample_alg = GRIORA_NearestNeighbour,
                     callback = None,
                     callback_data = None):
+        """ Reading a chunk of a GDAL band into a numpy array. The optional (buf_xsize,buf_ysize,buf_type)
+        parameters should generally not be specified if buf_obj is specified. The array is returned"""
+
         import gdalnumeric
 
         return gdalnumeric.BandReadAsArray( self, xoff, yoff,
                                             win_xsize, win_ysize,
-                                            buf_xsize, buf_ysize, buf_obj,
+                                            buf_xsize, buf_ysize, buf_type, buf_obj,
                                             resample_alg = resample_alg,
                                             callback = callback,
                                             callback_data = callback_data)
@@ -1556,6 +1520,10 @@ class RasterAttributeTable(_object):
         """ChangesAreWrittenToFile(self) -> int"""
         return _gdal.RasterAttributeTable_ChangesAreWrittenToFile(self, *args)
 
+    def DumpReadable(self, *args):
+        """DumpReadable(self)"""
+        return _gdal.RasterAttributeTable_DumpReadable(self, *args)
+
     def WriteArray(self, array, field, start=0):
         import gdalnumeric
 
@@ -1729,7 +1697,7 @@ def ApplyGeoTransform(*args):
 ApplyGeoTransform = _gdal.ApplyGeoTransform
 
 def InvGeoTransform(*args):
-  """InvGeoTransform(double gt_in) -> int"""
+  """InvGeoTransform(double gt_in) -> RETURN_NONE"""
   return _gdal.InvGeoTransform(*args)
 InvGeoTransform = _gdal.InvGeoTransform
 
@@ -1817,6 +1785,16 @@ def SerializeXMLTree(*args):
   """SerializeXMLTree(CPLXMLNode xmlnode) -> retStringAndCPLFree"""
   return _gdal.SerializeXMLTree(*args)
 SerializeXMLTree = _gdal.SerializeXMLTree
+
+def GetJPEG2000Structure(*args):
+  """GetJPEG2000Structure(char pszFilename, char options = None) -> CPLXMLNode"""
+  return _gdal.GetJPEG2000Structure(*args)
+GetJPEG2000Structure = _gdal.GetJPEG2000Structure
+
+def GetJPEG2000StructureAsString(*args):
+  """GetJPEG2000StructureAsString(char pszFilename, char options = None) -> retStringAndCPLFree"""
+  return _gdal.GetJPEG2000StructureAsString(*args)
+GetJPEG2000StructureAsString = _gdal.GetJPEG2000StructureAsString
 
 def GetDriverCount(*args):
   """GetDriverCount() -> int"""

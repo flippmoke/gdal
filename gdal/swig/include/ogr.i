@@ -126,7 +126,9 @@ typedef enum
   /** Raw Binary data */                        OFTBinary = 8,
   /** Date */                                   OFTDate = 9,
   /** Time */                                   OFTTime = 10,
-  /** Date and Time */                          OFTDateTime = 11
+  /** Date and Time */                          OFTDateTime = 11,
+  /** Single 64bit integer */                   OFTInteger64 = 12,
+  /** List of 64bit integers */                 OFTInteger64List = 13
 } OGRFieldType;
 
 %rename (FieldSubType) OGRFieldSubType;
@@ -155,6 +157,7 @@ typedef enum
 #include <iostream>
 using namespace std;
 
+#include "gdal.h"
 #include "ogr_api.h"
 #include "ogr_p.h"
 #include "ogr_core.h"
@@ -251,6 +254,8 @@ typedef void retGetPoints;
 %constant OFTDate = 9;
 %constant OFTTime = 10;
 %constant OFTDateTime = 11;
+%constant OFTInteger64 = 12;
+%constant OFTInteger64List = 13;
 
 %constant OFSTNone = 0;
 %constant OFSTBoolean = 1;
@@ -269,7 +274,15 @@ typedef void retGetPoints;
 %constant ALTER_NAME_FLAG = 1;
 %constant ALTER_TYPE_FLAG = 2;
 %constant ALTER_WIDTH_PRECISION_FLAG = 4;
-%constant ALTER_ALL_FLAG = 1 + 2 + 4;
+%constant ALTER_NULLABLE_FLAG = 8;
+%constant ALTER_DEFAULT_FLAG = 16;
+%constant ALTER_ALL_FLAG = 1 + 2 + 4 + 8 + 16;
+
+%constant F_VAL_NULL= 0x00000001; /**< Validate that fields respect not-null constraints */
+%constant F_VAL_GEOM_TYPE = 0x00000002; /**< Validate that geometries respect geometry column type */
+%constant F_VAL_WIDTH = 0x00000004; /**< Validate that (string) fields respect field width */
+%constant F_VAL_ALLOW_NULL_WHEN_DEFAULT = 0x00000008; /***<Allow fields that are null when there's an associated default value. */
+%constant F_VAL_ALL = 0xFFFFFFFF; /**< Enable all validation tests */
 
 %constant char *OLCRandomRead          = "RandomRead";
 %constant char *OLCSequentialWrite     = "SequentialWrite";
@@ -293,9 +306,14 @@ typedef void retGetPoints;
 %constant char *ODsCDeleteLayer        = "DeleteLayer";
 %constant char *ODsCCreateGeomFieldAfterCreateLayer  = "CreateGeomFieldAfterCreateLayer";
 %constant char *ODsCCurveGeometries    = "CurveGeometries";
+%constant char *ODsCTransactions       = "Transactions";
+%constant char *ODsCEmulatedTransactions = "EmulatedTransactions";
 
 %constant char *ODrCCreateDataSource   = "CreateDataSource";
 %constant char *ODrCDeleteDataSource   = "DeleteDataSource";
+
+%constant char *OLMD_FID64             = "OLMD_FID64";
+
 #else
 typedef int OGRErr;
 
@@ -326,12 +344,17 @@ typedef int OGRErr;
 #define ODsCDeleteLayer        "DeleteLayer"
 #define ODsCCreateGeomFieldAfterCreateLayer   "CreateGeomFieldAfterCreateLayer"
 #define ODsCCurveGeometries    "CurveGeometries"
+#define ODsCTransactions       "Transactions"
+#define ODsCEmulatedTransactions "EmulatedTransactions"
 
 #define ODrCCreateDataSource   "CreateDataSource"
 #define ODrCDeleteDataSource   "DeleteDataSource"
+
+#define OLMD_FID64             "OLMD_FID64"
+
 #endif
 
-#if defined(SWIGCSHARP) || defined(SWIGJAVA)
+#if defined(SWIGCSHARP) || defined(SWIGJAVA) || defined(SWIGPYTHON)
 
 #define OGRERR_NONE                0
 #define OGRERR_NOT_ENOUGH_DATA     1    /* not enough data to deserialize */
@@ -341,6 +364,8 @@ typedef int OGRErr;
 #define OGRERR_CORRUPT_DATA        5
 #define OGRERR_FAILURE             6
 #define OGRERR_UNSUPPORTED_SRS     7
+#define OGRERR_INVALID_HANDLE      8
+#define OGRERR_NON_EXISTING_FEATURE 9
 
 #endif
 
@@ -619,6 +644,10 @@ public:
     return OGR_DS_SyncToDisk(self);
   }
   
+  void FlushCache() {
+    GDALFlushCache( self );
+  }
+
   /* Note that datasources own their layers */
 #ifndef SWIGJAVA
   %feature( "kwargs" ) CreateLayer;
@@ -696,6 +725,23 @@ public:
         OGR_DS_SetStyleTable(self, (OGRStyleTableH) table);
   }
 
+#ifndef SWIGJAVA
+  %feature( "kwargs" ) StartTransaction;
+#endif
+  OGRErr StartTransaction(int force = FALSE)
+  {
+    return GDALDatasetStartTransaction(self, force);
+  }
+
+  OGRErr CommitTransaction()
+  {
+    return GDALDatasetCommitTransaction(self);
+  }
+
+  OGRErr RollbackTransaction()
+  {
+    return GDALDatasetRollbackTransaction(self);
+  }
 } /* %extend */
 
 
@@ -777,7 +823,7 @@ public:
   }
 
 %newobject GetFeature;
-  OGRFeatureShadow *GetFeature(long fid) {
+  OGRFeatureShadow *GetFeature(GIntBig fid) {
     return (OGRFeatureShadow*) OGR_L_GetFeature(self, fid);
   }
   
@@ -786,7 +832,7 @@ public:
     return (OGRFeatureShadow*) OGR_L_GetNextFeature(self);
   }
   
-  OGRErr SetNextByIndex(long new_index) {
+  OGRErr SetNextByIndex(GIntBig new_index) {
     return OGR_L_SetNextByIndex(self, new_index);
   }
   
@@ -800,7 +846,7 @@ public:
   }
 %clear OGRFeatureShadow *feature;
 
-  OGRErr DeleteFeature(long fid) {
+  OGRErr DeleteFeature(GIntBig fid) {
     return OGR_L_DeleteFeature(self, fid);
   }
   
@@ -815,7 +861,7 @@ public:
 #ifndef SWIGJAVA
   %feature( "kwargs" ) GetFeatureCount;  
 #endif
-  int GetFeatureCount(int force=1) {
+  GIntBig GetFeatureCount(int force=1) {
     return OGR_L_GetFeatureCount(self, force);
   }
   
@@ -1209,6 +1255,24 @@ public:
 #endif
   /* ------------------------------------------- */  
 
+  /* ---- GetFieldAsInteger64 ------------------ */
+
+  GIntBig GetFieldAsInteger64(int id) {
+    return OGR_F_GetFieldAsInteger64(self, id);
+  }
+
+#ifndef SWIGPERL
+  GIntBig GetFieldAsInteger64(const char* name) {
+      int i = OGR_F_GetFieldIndex(self, name);
+      if (i == -1)
+      CPLError(CE_Failure, 1, "No such field: '%s'", name);
+      else
+      return OGR_F_GetFieldAsInteger64(self, i);
+      return 0;
+  }
+#endif
+  /* ------------------------------------------- */  
+
   /* ---- GetFieldAsDouble --------------------- */
 
   double GetFieldAsDouble(int id) {
@@ -1228,14 +1292,16 @@ public:
   /* ------------------------------------------- */  
 
   %apply (int *OUTPUT) {(int *)};
+  %apply (float *OUTPUT) {(float *)};
   void GetFieldAsDateTime(int id, int *pnYear, int *pnMonth, int *pnDay,
-			  int *pnHour, int *pnMinute, int *pnSecond,
+			  int *pnHour, int *pnMinute, float *pfSecond,
 			  int *pnTZFlag) {
-      OGR_F_GetFieldAsDateTime(self, id, pnYear, pnMonth, pnDay,
-			       pnHour, pnMinute, pnSecond,
+      OGR_F_GetFieldAsDateTimeEx(self, id, pnYear, pnMonth, pnDay,
+			       pnHour, pnMinute, pfSecond,
 			       pnTZFlag);
   }
   %clear (int *);
+  %clear (float *);
 
 #if defined(SWIGJAVA)
   retIntArray GetFieldAsIntegerList(int id, int *nLen, const int **pList) {
@@ -1253,6 +1319,12 @@ public:
 #else
   void GetFieldAsIntegerList(int id, int *nLen, const int **pList) {
       *pList = OGR_F_GetFieldAsIntegerList(self, id, nLen);
+  }
+#endif
+
+#if defined(SWIGPYTHON)
+  void GetFieldAsInteger64List(int id, int *nLen, const GIntBig **pList) {
+      *pList = OGR_F_GetFieldAsInteger64List(self, id, nLen);
   }
 #endif
 
@@ -1372,11 +1444,11 @@ public:
       return OGR_F_GetGeomFieldIndex(self, name);
   }
 
-  int GetFID() {
+  GIntBig GetFID() {
     return OGR_F_GetFID(self);
   }
   
-  OGRErr SetFID(int fid) {
+  OGRErr SetFID(GIntBig fid) {
     return OGR_F_SetFID(self, fid);
   }
   
@@ -1418,7 +1490,12 @@ public:
   }
 #endif
   %clear (const char* value );
-  
+
+  void SetFieldInteger64(int id, GIntBig value) {
+    OGR_F_SetFieldInteger64(self, id, value);
+  }
+
+#ifndef SWIGPYTHON
   void SetField(int id, int value) {
     OGR_F_SetFieldInteger(self, id, value);
   }
@@ -1431,7 +1508,8 @@ public:
       else
 	  OGR_F_SetFieldInteger(self, i, value);
   }
-#endif
+#endif /* SWIGPERL */
+#endif /* SWIGPYTHON */
   
   void SetField(int id, double value) {
     OGR_F_SetFieldDouble(self, id, value);
@@ -1448,22 +1526,22 @@ public:
 #endif
   
   void SetField( int id, int year, int month, int day,
-                             int hour, int minute, int second, 
+                             int hour, int minute, float second, 
                              int tzflag ) {
-    OGR_F_SetFieldDateTime(self, id, year, month, day,
+    OGR_F_SetFieldDateTimeEx(self, id, year, month, day,
                              hour, minute, second, 
                              tzflag);
   }
 
 #ifndef SWIGPERL  
   void SetField(const char* name, int year, int month, int day,
-                             int hour, int minute, int second, 
+                             int hour, int minute, float second, 
                              int tzflag ) {
       int i = OGR_F_GetFieldIndex(self, name);
       if (i == -1)
 	  CPLError(CE_Failure, 1, "No such field: '%s'", name);
       else
-	  OGR_F_SetFieldDateTime(self, i, year, month, day,
+	  OGR_F_SetFieldDateTimeEx(self, i, year, month, day,
 				 hour, minute, second, 
 				 tzflag);
   }
@@ -1472,6 +1550,12 @@ public:
   void SetFieldIntegerList(int id, int nList, int *pList) {
       OGR_F_SetFieldIntegerList(self, id, nList, pList);
   }
+
+#if defined(SWIGPYTHON)
+  void SetFieldInteger64List(int id, int nList, GIntBig *pList) {
+      OGR_F_SetFieldInteger64List(self, id, nList, pList);
+  }
+#endif
 
   void SetFieldDoubleList(int id, int nList, double *pList) {
       OGR_F_SetFieldDoubleList(self, id, nList, pList);
@@ -1538,21 +1622,31 @@ public:
 
   /* ---- GetFieldType ------------------------- */  
   OGRFieldType GetFieldType(int id) {
-    return (OGRFieldType) OGR_Fld_GetType( OGR_F_GetFieldDefnRef( self, id));
+      OGRFieldDefnH fd = OGR_F_GetFieldDefnRef( self,  id );
+      if (fd)
+          return (OGRFieldType) OGR_Fld_GetType( fd );
+      else
+          return (OGRFieldType)0;
   }
   
   OGRFieldType GetFieldType(const char* name) {
       int i = OGR_F_GetFieldIndex(self, name);
       if (i == -1) {
-	  CPLError(CE_Failure, 1, "No such field: '%s'", name);
-	  return (OGRFieldType)0;
+          CPLError(CE_Failure, 1, "No such field: '%s'", name);
+          return (OGRFieldType)0;
       } else
-	  return (OGRFieldType) OGR_Fld_GetType( 
-	      OGR_F_GetFieldDefnRef( self,  i )
-	      );
+          return (OGRFieldType) OGR_Fld_GetType( OGR_F_GetFieldDefnRef( self, i ) );
   }
   /* ------------------------------------------- */  
   
+  int Validate( int flags = OGR_F_VAL_ALL, int bEmitError = TRUE ) {
+    return OGR_F_Validate(self, flags, bEmitError);
+  }
+
+  void FillUnsetWithDefault( int bNotNullableOnly = FALSE, char** options = NULL ) {
+    OGR_F_FillUnsetWithDefault(self, bNotNullableOnly, options );
+  }
+
 } /* %extend */
 
 
@@ -1732,6 +1826,8 @@ public:
             case OFTDate:
             case OFTTime:
             case OFTDateTime:
+            case OFTInteger64:
+            case OFTInteger64List:
                 return TRUE;
             default:
                 CPLError(CE_Failure, CPLE_IllegalArg, "Illegal field type value");
@@ -1847,9 +1943,28 @@ public:
   }
 
   void SetIgnored(int bIgnored ) {
-    return OGR_Fld_SetIgnored( self, bIgnored );
+    OGR_Fld_SetIgnored( self, bIgnored );
   }
 
+  int IsNullable() {
+    return OGR_Fld_IsNullable( self );
+  }
+
+  void SetNullable(int bNullable ) {
+    OGR_Fld_SetNullable( self, bNullable );
+  }
+
+  const char* GetDefault() {
+    return OGR_Fld_GetDefault( self );
+  }
+
+  void SetDefault(const char* pszValue ) {
+    OGR_Fld_SetDefault( self, pszValue );
+  }
+
+  int IsDefaultDriverSpecific() {
+    return OGR_Fld_IsDefaultDriverSpecific( self );
+  }
 } /* %extend */
 
 
@@ -1923,6 +2038,13 @@ public:
     OGR_GFld_SetIgnored( self, bIgnored );
   }
 
+  int IsNullable() {
+    return OGR_GFld_IsNullable( self );
+  }
+
+  void SetNullable(int bNullable ) {
+    return OGR_GFld_SetNullable( self, bNullable );
+  }
 } /* %extend */
 
 

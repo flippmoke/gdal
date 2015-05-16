@@ -34,7 +34,7 @@ CPL_CVSID("$Id$");
 
 OGRMutexedLayer::OGRMutexedLayer(OGRLayer* poDecoratedLayer,
                                  int bTakeOwnership,
-                                 void* hMutex) :
+                                 CPLMutex* hMutex) :
         OGRLayerDecorator(poDecoratedLayer, bTakeOwnership), m_hMutex(hMutex)
 {
     SetDescription( poDecoratedLayer->GetDescription() );
@@ -95,13 +95,13 @@ OGRFeature *OGRMutexedLayer::GetNextFeature()
     return OGRLayerDecorator::GetNextFeature();
 }
 
-OGRErr      OGRMutexedLayer::SetNextByIndex( long nIndex )
+OGRErr      OGRMutexedLayer::SetNextByIndex( GIntBig nIndex )
 {
     CPLMutexHolderOptionalLockD(m_hMutex);
     return OGRLayerDecorator::SetNextByIndex(nIndex);
 }
 
-OGRFeature *OGRMutexedLayer::GetFeature( long nFID )
+OGRFeature *OGRMutexedLayer::GetFeature( GIntBig nFID )
 {
     CPLMutexHolderOptionalLockD(m_hMutex);
     return OGRLayerDecorator::GetFeature(nFID);
@@ -119,7 +119,7 @@ OGRErr      OGRMutexedLayer::ICreateFeature( OGRFeature *poFeature )
     return OGRLayerDecorator::ICreateFeature(poFeature);
 }
 
-OGRErr      OGRMutexedLayer::DeleteFeature( long nFID )
+OGRErr      OGRMutexedLayer::DeleteFeature( GIntBig nFID )
 {
     CPLMutexHolderOptionalLockD(m_hMutex);
     return OGRLayerDecorator::DeleteFeature(nFID);
@@ -149,7 +149,7 @@ OGRSpatialReference *OGRMutexedLayer::GetSpatialRef()
     return OGRLayerDecorator::GetSpatialRef();
 }
 
-int         OGRMutexedLayer::GetFeatureCount( int bForce )
+GIntBig         OGRMutexedLayer::GetFeatureCount( int bForce )
 {
     CPLMutexHolderOptionalLockD(m_hMutex);
     return OGRLayerDecorator::GetFeatureCount(bForce);
@@ -256,6 +256,34 @@ OGRErr      OGRMutexedLayer::SetIgnoredFields( const char **papszFields )
 {
     CPLMutexHolderOptionalLockD(m_hMutex);
     return OGRLayerDecorator::SetIgnoredFields(papszFields);
+}
+
+char      **OGRMutexedLayer::GetMetadata( const char * pszDomain )
+{
+    CPLMutexHolderOptionalLockD(m_hMutex);
+    return OGRLayerDecorator::GetMetadata(pszDomain);
+}
+
+CPLErr      OGRMutexedLayer::SetMetadata( char ** papszMetadata,
+                                          const char * pszDomain )
+{
+    CPLMutexHolderOptionalLockD(m_hMutex);
+    return OGRLayerDecorator::SetMetadata(papszMetadata, pszDomain);
+}
+
+const char *OGRMutexedLayer::GetMetadataItem( const char * pszName,
+                                              const char * pszDomain )
+{
+    CPLMutexHolderOptionalLockD(m_hMutex);
+    return OGRLayerDecorator::GetMetadataItem(pszName, pszDomain);
+}
+
+CPLErr      OGRMutexedLayer::SetMetadataItem( const char * pszName,
+                                              const char * pszValue,
+                                              const char * pszDomain )
+{
+    CPLMutexHolderOptionalLockD(m_hMutex);
+    return OGRLayerDecorator::SetMetadataItem(pszName, pszValue, pszDomain);
 }
 
 #if defined(WIN32) && defined(_MSC_VER)

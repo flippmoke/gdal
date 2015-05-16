@@ -6,7 +6,8 @@ OBJ	=	ogrsfdriverregistrar.o ogrlayer.o ogrdatasource.o \
 		ogrsfdriver.o ogrregisterall.o ogr_gensql.o \
 		ogr_attrind.o ogr_miattrind.o ogrlayerdecorator.o \
 		ogrwarpedlayer.o ogrunionlayer.o ogrlayerpool.o \
-		ogrmutexedlayer.o ogrmutexeddatasource.o
+		ogrmutexedlayer.o ogrmutexeddatasource.o \
+		ogremulatedtransaction.o
 
 CXXFLAGS :=     $(CXXFLAGS) -DINST_DATA=\"$(INST_DATA)\"
 
@@ -155,6 +156,7 @@ endif
 
 ifeq ($(CURL_SETTING),yes)
 CXXFLAGS :=	$(CXXFLAGS) -DWFS_ENABLED
+CXXFLAGS :=	$(CXXFLAGS) -DCSW_ENABLED
 endif
 
 ifeq ($(GEOMEDIA_SETTING),yes)
@@ -207,6 +209,10 @@ endif
 
 ifeq ($(CURL_SETTING),yes)
 CXXFLAGS :=	$(CXXFLAGS) -DCARTODB_ENABLED
+endif
+
+ifeq ($(CURL_SETTING),yes)
+CXXFLAGS :=	$(CXXFLAGS) -DPLSCENES_ENABLED
 endif
 
 endif

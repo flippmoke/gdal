@@ -105,7 +105,7 @@
 /* Any grammar rule that does $$ =  must be listed afterwards */
 /* as well as SWQT_INTEGER_NUMBER SWQT_FLOAT_NUMBER SWQT_STRING SWQT_IDENTIFIER that are allocated by swqlex() */
 %destructor { delete $$; } SWQT_INTEGER_NUMBER SWQT_FLOAT_NUMBER SWQT_STRING SWQT_IDENTIFIER
-%destructor { delete $$; } value_expr_list field_value value_expr type_def string_or_identifier table_def
+%destructor { delete $$; } value_expr_list field_value value_expr value_expr_non_logical type_def table_def
 
 %%
 
@@ -341,7 +341,7 @@ value_expr_list:
 
     | value_expr
             {
-            $$ = new swq_expr_node( SWQ_UNKNOWN ); /* list */
+            $$ = new swq_expr_node( SWQ_ARGUMENT_LIST ); /* temporary value */
             $$->PushSubExpression( $1 );
         }
 
@@ -358,12 +358,8 @@ field_value:
             $$ = $1;  // validation deferred.
             $$->eNodeType = SNT_COLUMN;
             $$->field_index = $$->table_index = -1;
-            $$->string_value = (char *) 
-                            CPLRealloc( $$->string_value, 
-                                        strlen($$->string_value) 
-                                        + strlen($3->string_value) + 2 );
-            strcat( $$->string_value, "." );
-            strcat( $$->string_value, $3->string_value );
+            $$->table_name = $$->string_value;
+            $$->string_value = CPLStrdup($3->string_value);
             delete $3;
             $3 = NULL;
         }
@@ -456,12 +452,24 @@ value_expr_non_logical:
 
             if( poOp == NULL )
             {
-                CPLError( CE_Failure, CPLE_AppDefined, 
-                                "Undefined function '%s' used.",
-                                $1->string_value );
-                delete $1;
-                delete $3;
-                YYERROR;
+                if( context->bAcceptCustomFuncs )
+                {
+                    $$ = $3;
+                    $$->eNodeType = SNT_OPERATION;
+                    $$->nOperation = SWQ_CUSTOM_FUNC;
+                    $$->string_value = CPLStrdup($1->string_value);
+                    $$->ReverseSubExpressions();
+                    delete $1;
+                }
+                else
+                {
+                    CPLError( CE_Failure, CPLE_AppDefined, 
+                                    "Undefined function '%s' used.",
+                                    $1->string_value );
+                    delete $1;
+                    delete $3;
+                    YYERROR;
+                }
             }
             else
             {
@@ -550,6 +558,12 @@ select_core:
         delete $4;
     }
 
+    | SWQT_SELECT SWQT_DISTINCT select_field_list SWQT_FROM table_def opt_joins opt_where opt_order_by
+    {
+        context->poCurSelect->query_mode = SWQM_DISTINCT_LIST;
+        delete $5;
+    }
+
 opt_union_all:
     | union_all select_statement
 
@@ -565,43 +579,13 @@ select_field_list:
     | column_spec ',' select_field_list
 
 column_spec: 
-    SWQT_DISTINCT field_value
-        {
-            if( !context->poCurSelect->PushField( $2, NULL, TRUE ) )
-            {
-                delete $2;
-                YYERROR;
-            }
-        }
-
-    | SWQT_DISTINCT SWQT_STRING
-        {
-            if( !context->poCurSelect->PushField( $2, NULL, TRUE ) )
-            {
-                delete $2;
-                YYERROR;
-            }
-        }
-
-    | value_expr
+    value_expr
         {
             if( !context->poCurSelect->PushField( $1 ) )
             {
                 delete $1;
                 YYERROR;
             }
-        }
-
-    | SWQT_DISTINCT field_value as_clause
-        {
-            if( !context->poCurSelect->PushField( $2, $3->string_value, TRUE ))
-            {
-                delete $2;
-                delete $3;
-                YYERROR;
-            }
-
-            delete $3;
         }
 
     | value_expr as_clause
@@ -631,17 +615,17 @@ column_spec:
 
     | SWQT_IDENTIFIER '.' '*'
         {
-            CPLString osQualifiedField;
+            CPLString osTableName;
 
-            osQualifiedField = $1->string_value;
-            osQualifiedField += ".*";
+            osTableName = $1->string_value;
 
             delete $1;
             $1 = NULL;
 
             swq_expr_node *poNode = new swq_expr_node();
             poNode->eNodeType = SNT_COLUMN;
-            poNode->string_value = CPLStrdup( osQualifiedField );
+            poNode->table_name = CPLStrdup(osTableName );
+            poNode->string_value = CPLStrdup( "*" );
             poNode->table_index = poNode->field_index = -1;
 
             if( !context->poCurSelect->PushField( poNode ) )
@@ -768,13 +752,13 @@ column_spec:
         }
 
 as_clause:
-    SWQT_AS string_or_identifier
+    SWQT_AS SWQT_IDENTIFIER
         {
             delete $1;
             $$ = $2;
         }
 
-    | string_or_identifier
+    | SWQT_IDENTIFIER
 
 
 opt_where:  
@@ -784,23 +768,17 @@ opt_where:
         }
 
 opt_joins:
-    | SWQT_JOIN table_def SWQT_ON field_value '=' field_value opt_joins
+    | SWQT_JOIN table_def SWQT_ON value_expr opt_joins
         {
             context->poCurSelect->PushJoin( $2->int_value,
-                                            $4->string_value, 
-                                            $6->string_value );
+                                            $4 );
             delete $2;
-            delete $4;
-            delete $6;
         }
-    | SWQT_LEFT SWQT_JOIN table_def SWQT_ON field_value '=' field_value opt_joins
+    | SWQT_LEFT SWQT_JOIN table_def SWQT_ON value_expr opt_joins
         {
             context->poCurSelect->PushJoin( $3->int_value,
-                                            $5->string_value, 
-                                            $7->string_value );
+                                            $5 );
             delete $3;
-            delete $5;
-            delete $7;
 	    }
 
 opt_order_by:
@@ -813,35 +791,25 @@ sort_spec_list:
 sort_spec:
     field_value
         {
-            context->poCurSelect->PushOrderBy( $1->string_value, TRUE );
+            context->poCurSelect->PushOrderBy( $1->table_name, $1->string_value, TRUE );
             delete $1;
             $1 = NULL;
         }
     | field_value SWQT_ASC
         {
-            context->poCurSelect->PushOrderBy( $1->string_value, TRUE );
+            context->poCurSelect->PushOrderBy( $1->table_name, $1->string_value, TRUE );
             delete $1;
             $1 = NULL;
         }
     | field_value SWQT_DESC
         {
-            context->poCurSelect->PushOrderBy( $1->string_value, FALSE );
+            context->poCurSelect->PushOrderBy( $1->table_name, $1->string_value, FALSE );
             delete $1;
             $1 = NULL;
         }
 
-string_or_identifier:
-    SWQT_IDENTIFIER
-        {
-            $$ = $1;
-        }
-    | SWQT_STRING
-        {
-            $$ = $1;
-        }
-
 table_def:
-    string_or_identifier
+    SWQT_IDENTIFIER
     {
         int iTable;
         iTable =context->poCurSelect->PushTableDef( NULL, $1->string_value,
@@ -851,7 +819,7 @@ table_def:
         $$ = new swq_expr_node( iTable );
     }
 
-    | string_or_identifier SWQT_IDENTIFIER
+    | SWQT_IDENTIFIER as_clause
     {
         int iTable;
         iTable = context->poCurSelect->PushTableDef( NULL, $1->string_value,
@@ -862,7 +830,7 @@ table_def:
         $$ = new swq_expr_node( iTable );
     }
 
-    | SWQT_STRING '.' string_or_identifier
+    | SWQT_STRING '.' SWQT_IDENTIFIER
     {
         int iTable;
         iTable = context->poCurSelect->PushTableDef( $1->string_value,
@@ -873,7 +841,31 @@ table_def:
         $$ = new swq_expr_node( iTable );
     }
 
-    | SWQT_STRING '.' string_or_identifier SWQT_IDENTIFIER
+    | SWQT_STRING '.' SWQT_IDENTIFIER as_clause
+    {
+        int iTable;
+        iTable = context->poCurSelect->PushTableDef( $1->string_value,
+                                                     $3->string_value, 
+                                                     $4->string_value );
+        delete $1;
+        delete $3;
+        delete $4;
+
+        $$ = new swq_expr_node( iTable );
+    }
+
+    | SWQT_IDENTIFIER '.' SWQT_IDENTIFIER
+    {
+        int iTable;
+        iTable = context->poCurSelect->PushTableDef( $1->string_value,
+                                                     $3->string_value, NULL );
+        delete $1;
+        delete $3;
+
+        $$ = new swq_expr_node( iTable );
+    }
+
+    | SWQT_IDENTIFIER '.' SWQT_IDENTIFIER as_clause
     {
         int iTable;
         iTable = context->poCurSelect->PushTableDef( $1->string_value,

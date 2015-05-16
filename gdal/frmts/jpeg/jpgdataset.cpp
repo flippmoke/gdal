@@ -3575,7 +3575,7 @@ JPGDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     }
 
 /* -------------------------------------------------------------------- */
-/*      Re-open dataset, and copy any auxilary pam information.         */
+/*      Re-open dataset, and copy any auxiliary pam information.         */
 /* -------------------------------------------------------------------- */
 
     /* If outputing to stdout, we can't reopen it, so we'll return */
@@ -3716,6 +3716,7 @@ void GDALRegister_JPEG()
         poDriver->SetMetadataItem( GDAL_DMD_HELPTOPIC, 
                                    "frmt_jpeg.html" );
         poDriver->SetMetadataItem( GDAL_DMD_EXTENSION, "jpg" );
+        poDriver->SetMetadataItem( GDAL_DMD_EXTENSIONS, "jpg jpeg" );
         poDriver->SetMetadataItem( GDAL_DMD_MIMETYPE, "image/jpeg" );
 
 #if defined(JPEG_LIB_MK1_OR_12BIT) || defined(JPEG_DUAL_MODE_8_12)

@@ -92,7 +92,7 @@ OGRFeatureDefn* OGRGeoJSONLayer::GetLayerDefn()
 /*                           GetFeatureCount                            */
 /************************************************************************/
 
-int OGRGeoJSONLayer::GetFeatureCount( int bForce )
+GIntBig OGRGeoJSONLayer::GetFeatureCount( int bForce )
 {
     if (m_poFilterGeom == NULL && m_poAttrQuery == NULL)
         return static_cast<int>( seqFeatures_.size() );
@@ -147,7 +147,12 @@ OGRFeature* OGRGeoJSONLayer::GetNextFeature()
 
 int OGRGeoJSONLayer::TestCapability( const char* pszCap )
 {
-    UNREFERENCED_PARAM(pszCap);
+    if( EQUAL(pszCap, OLCFastFeatureCount) ||
+        EQUAL(pszCap, OLCFastGetExtent) ||
+        EQUAL(pszCap, OLCStringsAsUTF8) )
+    {
+        return TRUE;
+    }
 
     return FALSE;
 }
@@ -200,6 +205,10 @@ void OGRGeoJSONLayer::AddFeature( OGRFeature* poFeature )
             poNewFeature->SetField( nField, nFID );
         }
     }
+    
+        
+    if( (GIntBig)(int)poNewFeature->GetFID() != poNewFeature->GetFID() )
+        SetMetadataItem(OLMD_FID64, "YES");
 
     seqFeatures_.push_back( poNewFeature );
 }

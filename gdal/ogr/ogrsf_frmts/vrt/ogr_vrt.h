@@ -75,6 +75,8 @@ class OGRVRTGeomFieldProps
         int                 bUseSpatialSubquery;
 
         OGREnvelope         sStaticEnvelope;
+        
+        int                 bNullable;
 
                         OGRVRTGeomFieldProps();
                        ~OGRVRTGeomFieldProps();
@@ -110,6 +112,7 @@ class OGRVRTLayer : public OGRLayer
     char                *pszAttrFilter;
 
     int                 iFIDField; // -1 means pass through. 
+    CPLString           osFIDFieldName;
     int                 iStyleField; // -1 means pass through.
 
     // Attribute Mapping
@@ -128,7 +131,7 @@ class OGRVRTLayer : public OGRLayer
     OGRFeatureDefn     *GetSrcLayerDefn();
     void                ClipAndAssignSRS(OGRFeature* poFeature);
 
-    int                 nFeatureCount;
+    GIntBig             nFeatureCount;
 
     int                 bError;
 
@@ -155,15 +158,15 @@ class OGRVRTLayer : public OGRLayer
     virtual void        ResetReading();
     virtual OGRFeature *GetNextFeature();
 
-    virtual OGRFeature *GetFeature( long nFeatureId );
+    virtual OGRFeature *GetFeature( GIntBig nFeatureId );
 
-    virtual OGRErr      SetNextByIndex( long nIndex );
+    virtual OGRErr      SetNextByIndex( GIntBig nIndex );
 
     virtual OGRFeatureDefn *GetLayerDefn();
 
     virtual OGRSpatialReference *GetSpatialRef();
 
-    virtual int         GetFeatureCount( int );
+    virtual GIntBig     GetFeatureCount( int );
 
     virtual OGRErr      SetAttributeFilter( const char * );
 
@@ -180,7 +183,7 @@ class OGRVRTLayer : public OGRLayer
 
     virtual OGRErr      ISetFeature( OGRFeature* poFeature );
 
-    virtual OGRErr      DeleteFeature( long nFID );
+    virtual OGRErr      DeleteFeature( GIntBig nFID );
 
     virtual OGRErr      SyncToDisk();
 

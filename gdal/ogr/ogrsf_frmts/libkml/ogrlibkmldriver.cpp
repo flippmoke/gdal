@@ -35,7 +35,7 @@
 
 using kmldom::KmlFactory;
 
-static void *hMutex = NULL;
+static CPLMutex *hMutex = NULL;
 static KmlFactory* m_poKmlFactory = NULL;
 
 /******************************************************************************
@@ -333,6 +333,8 @@ void RegisterOGRLIBKML (
 "</LayerCreationOptionList>");
 
         poDriver->SetMetadataItem( GDAL_DCAP_VIRTUALIO, "YES" );
+        
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONFIELDDATATYPES, "Integer Real String" );
 
         poDriver->pfnOpen = OGRLIBKMLDriverOpen;
         poDriver->pfnIdentify = OGRLIBKMLDriverIdentify;

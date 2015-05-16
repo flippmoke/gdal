@@ -222,9 +222,9 @@ static void DBFWriteHeader(DBFHandle psDBF)
     abyHeader[0] = 0x03;		/* memo field? - just copying 	*/
 
     /* write out update date */
-    abyHeader[1] = psDBF->nUpdateYearSince1900;
-    abyHeader[2] = psDBF->nUpdateMonth;
-    abyHeader[3] = psDBF->nUpdateDay;
+    abyHeader[1] = (unsigned char) psDBF->nUpdateYearSince1900;
+    abyHeader[2] = (unsigned char) psDBF->nUpdateMonth;
+    abyHeader[3] = (unsigned char) psDBF->nUpdateDay;
 
     /* record count preset at zero */
 
@@ -1267,7 +1267,7 @@ DBFGetFieldInfo( DBFHandle psDBF, int iField, char * pszFieldName,
              || psDBF->pachFieldType[iField] == 'F' )
     {
 	if( psDBF->panFieldDecimals[iField] > 0 
-            || psDBF->panFieldSize[iField] > 10 )
+            || psDBF->panFieldSize[iField] >= 10 )
 	    return( FTDouble );
 	else
 	    return( FTInteger );

@@ -87,7 +87,7 @@ static double Get(GDALPDFObject* poObj, int nIndice = -1);
 
 #ifdef HAVE_POPPLER
 
-static void* hGlobalParamsMutex = NULL;
+static CPLMutex* hGlobalParamsMutex = NULL;
 
 /************************************************************************/
 /*                          ObjectAutoFree                              */
@@ -128,12 +128,9 @@ class GDALPDFOutputDev : public SplashOutputDev
 
     public:
         GDALPDFOutputDev(SplashColorMode colorModeA, int bitmapRowPadA,
-                         GBool reverseVideoA, SplashColorPtr paperColorA,
-                         GBool bitmapTopDownA = gTrue,
-                         GBool allowAntialiasA = gTrue) :
+                         GBool reverseVideoA, SplashColorPtr paperColorA) :
                 SplashOutputDev(colorModeA, bitmapRowPadA,
-                                reverseVideoA, paperColorA,
-                                bitmapTopDownA, allowAntialiasA),
+                                reverseVideoA, paperColorA),
                 bEnableVector(TRUE),
                 bEnableText(TRUE),
                 bEnableBitmap(TRUE) {}
@@ -1277,6 +1274,7 @@ static void PDFFreeDoc(PDFDoc* poDoc)
     {
         /* hack to avoid potential cross heap issues on Win32 */
         /* str is the VSIPDFFileStream object passed in the constructor of PDFDoc */
+        // NOTE: This is potentially very dangerous. See comment in VSIPDFFileStream::FillBuffer() */
         delete poDoc->str;
         poDoc->str = NULL;
 
@@ -2849,7 +2847,10 @@ GDALDataset *PDFDataset::Open( GDALOpenInfo * poOpenInfo )
                 if (EQUAL(pszUserPwd, "ASK_INTERACTIVE"))
                 {
                     printf( "Enter password (will be echo'ed in the console): " );
-                    fgets( szPassword, sizeof(szPassword), stdin );
+                    if (0 == fgets( szPassword, sizeof(szPassword), stdin ))
+                    {
+                      fprintf(stderr, "WARNING: Error getting password.\n");
+                    }
                     szPassword[sizeof(szPassword)-1] = 0;
                     char* sz10 = strchr(szPassword, '\n');
                     if (sz10)
@@ -3072,6 +3073,7 @@ GDALDataset *PDFDataset::Open( GDALOpenInfo * poOpenInfo )
         dfRotation = poPagePodofo->GetRotation();
 #endif
     if ( dfRotation == 90 ||
+         dfRotation == -90 ||
          dfRotation == 270 )
     {
 /* FIXME: the non poppler case should be implemented. This needs to rotate */
@@ -3107,14 +3109,36 @@ GDALDataset *PDFDataset::Open( GDALOpenInfo * poOpenInfo )
         CPLDebug("PDF", "OGC Encoding Best Practice style detected");
         if (poDS->ParseLGIDictObject(poLGIDict))
         {
-            if (poDS->bHasCTM)
+            if (poDS->bHasCTM )
             {
-                poDS->adfGeoTransform[0] = poDS->adfCTM[4] + poDS->adfCTM[0] * dfX1 + poDS->adfCTM[2] * dfY2;
-                poDS->adfGeoTransform[1] = poDS->adfCTM[0] / dfUserUnit;
-                poDS->adfGeoTransform[2] = poDS->adfCTM[1] / dfUserUnit;
-                poDS->adfGeoTransform[3] = poDS->adfCTM[5] + poDS->adfCTM[1] * dfX1 + poDS->adfCTM[3] * dfY2;
-                poDS->adfGeoTransform[4] = - poDS->adfCTM[2] / dfUserUnit;
-                poDS->adfGeoTransform[5] = - poDS->adfCTM[3] / dfUserUnit;
+                if ( dfRotation == 90 )
+                {
+                    poDS->adfGeoTransform[0] = poDS->adfCTM[4];
+                    poDS->adfGeoTransform[1] = poDS->adfCTM[2] / dfUserUnit;
+                    poDS->adfGeoTransform[2] = poDS->adfCTM[0] / dfUserUnit;
+                    poDS->adfGeoTransform[3] = poDS->adfCTM[5];
+                    poDS->adfGeoTransform[4] = poDS->adfCTM[3] / dfUserUnit;
+                    poDS->adfGeoTransform[5] = poDS->adfCTM[1] / dfUserUnit;
+                }
+                else if ( dfRotation == -90 || dfRotation == 270 )
+                {
+                    poDS->adfGeoTransform[0] = poDS->adfCTM[4] + poDS->adfCTM[2] * poDS->dfPageHeight + poDS->adfCTM[0] * poDS->dfPageWidth;
+                    poDS->adfGeoTransform[1] = -poDS->adfCTM[2] / dfUserUnit;
+                    poDS->adfGeoTransform[2] = -poDS->adfCTM[0] / dfUserUnit;
+                    poDS->adfGeoTransform[3] = poDS->adfCTM[5] + poDS->adfCTM[3] * poDS->dfPageHeight + poDS->adfCTM[1] * poDS->dfPageWidth;
+                    poDS->adfGeoTransform[4] = -poDS->adfCTM[3] / dfUserUnit;
+                    poDS->adfGeoTransform[5] = -poDS->adfCTM[1] / dfUserUnit;
+                }
+                else
+                {
+                    poDS->adfGeoTransform[0] = poDS->adfCTM[4] + poDS->adfCTM[2] * poDS->dfPageHeight;
+                    poDS->adfGeoTransform[1] = poDS->adfCTM[0] / dfUserUnit;
+                    poDS->adfGeoTransform[2] = - poDS->adfCTM[2] / dfUserUnit;
+                    poDS->adfGeoTransform[3] = poDS->adfCTM[5] + poDS->adfCTM[3] * poDS->dfPageHeight;
+                    poDS->adfGeoTransform[4] = poDS->adfCTM[1] / dfUserUnit;
+                    poDS->adfGeoTransform[5] = - poDS->adfCTM[3] / dfUserUnit;
+                }
+                
                 poDS->bGeoTransformValid = TRUE;
             }
 
@@ -3123,8 +3147,25 @@ GDALDataset *PDFDataset::Open( GDALOpenInfo * poOpenInfo )
             int i;
             for(i=0;i<poDS->nGCPCount;i++)
             {
-                poDS->pasGCPList[i].dfGCPPixel = poDS->pasGCPList[i].dfGCPPixel * dfUserUnit;
-                poDS->pasGCPList[i].dfGCPLine = poDS->nRasterYSize - poDS->pasGCPList[i].dfGCPLine * dfUserUnit;
+                if ( dfRotation == 90 )
+                {
+                    double dfPixel = poDS->pasGCPList[i].dfGCPPixel * dfUserUnit;
+                    double dfLine = poDS->pasGCPList[i].dfGCPLine * dfUserUnit;
+                    poDS->pasGCPList[i].dfGCPPixel = dfLine;
+                    poDS->pasGCPList[i].dfGCPLine = dfPixel;
+                }
+                else if ( dfRotation == -90 || dfRotation == 270 )
+                {
+                    double dfPixel = poDS->pasGCPList[i].dfGCPPixel * dfUserUnit;
+                    double dfLine = poDS->pasGCPList[i].dfGCPLine * dfUserUnit;
+                    poDS->pasGCPList[i].dfGCPPixel = poDS->nRasterXSize - dfLine;
+                    poDS->pasGCPList[i].dfGCPLine = poDS->nRasterYSize - dfPixel;
+                }
+                else
+                {
+                    poDS->pasGCPList[i].dfGCPPixel = poDS->pasGCPList[i].dfGCPPixel * dfUserUnit;
+                    poDS->pasGCPList[i].dfGCPLine = poDS->nRasterYSize - poDS->pasGCPList[i].dfGCPLine * dfUserUnit;
+                }
             }
         }
     }
@@ -3250,8 +3291,22 @@ GDALDataset *PDFDataset::Open( GDALOpenInfo * poOpenInfo )
 
             for(i=0;i<nPoints;i++)
             {
-                double x = poRing->getX(i) * dfUserUnit;
-                double y = poDS->nRasterYSize - poRing->getY(i) * dfUserUnit;
+                double x, y;
+                if( dfRotation == 90.0 )
+                {
+                    x = poRing->getY(i) * dfUserUnit;
+                    y = poRing->getX(i) * dfUserUnit;
+                }
+                else if( dfRotation == -90.0 || dfRotation == 270.0 )
+                {
+                    x = poDS->nRasterXSize - poRing->getY(i) * dfUserUnit;
+                    y = poDS->nRasterYSize - poRing->getX(i) * dfUserUnit;
+                }
+                else
+                {
+                    x = poRing->getX(i) * dfUserUnit;
+                    y = poDS->nRasterYSize - poRing->getY(i) * dfUserUnit;
+                }
                 double X = poDS->adfGeoTransform[0] + x * poDS->adfGeoTransform[1] +
                                                       y * poDS->adfGeoTransform[2];
                 double Y = poDS->adfGeoTransform[3] + x * poDS->adfGeoTransform[4] +
@@ -3729,7 +3784,8 @@ int PDFDataset::ParseLGIDictDictSecondPass(GDALPDFDictionary* poLGIDict)
     {
         GDALPDFArray* poRegistrationArray = poRegistration->GetArray();
         int nLength = poRegistrationArray->GetLength();
-        if (nLength > 4 || (!bHasCTM && nLength >= 2) )
+        if( nLength > 4 || (!bHasCTM && nLength >= 2) ||
+            CSLTestBoolean(CPLGetConfigOption("PDF_REPORT_GCPS", "NO")) )
         {
             nGCPCount = 0;
             pasGCPList = (GDAL_GCP *) CPLCalloc(sizeof(GDAL_GCP),nLength);
@@ -3847,6 +3903,7 @@ int PDFDataset::ParseProjDict(GDALPDFDictionary* poProjDict)
     {
         if (poDatum->GetType() == PDFObjectType_String)
         {
+            /* Using Annex A of http://portal.opengeospatial.org/files/?artifact_id=40537 */
             const char* pszDatum = poDatum->GetString().c_str();
             CPLDebug("PDF", "Datum = %s", pszDatum);
             if (EQUAL(pszDatum, "WE") || EQUAL(pszDatum, "WGE"))
@@ -3879,6 +3936,28 @@ int PDFDataset::ParseProjDict(GDALPDFDictionary* poProjDict)
             else if (EQUAL(pszDatum, "GDS")) /* Geocentric Datum of Australia */
             {
                 oSRS.importFromEPSG(4283);
+            }
+            else if (EQUALN(pszDatum, "OHA-", 4)) /* Old Hawaiian */
+            {
+                oSRS.importFromEPSG(4135); /* matches OHA-M (Mean) */
+                if( !EQUAL(pszDatum, "OHA-M") )
+                {
+                    CPLError(CE_Warning, CPLE_AppDefined,
+                             "Using OHA-M (Old Hawaiian Mean) definition for %s. Potential issue with datum shift parameters",
+                             pszDatum);
+                    OGR_SRSNode *poNode = oSRS.GetRoot();
+                    int iChild = poNode->FindChild( "AUTHORITY" );
+                    if( iChild != -1 )
+                        poNode->DestroyChild( iChild );
+                    iChild = poNode->FindChild( "DATUM" );
+                    if( iChild != -1 )
+                    {
+                        poNode = poNode->GetChild(iChild);
+                        iChild = poNode->FindChild( "AUTHORITY" );
+                        if( iChild != -1 )
+                            poNode->DestroyChild( iChild );
+                    }
+                }
             }
             else
             {
@@ -3960,10 +4039,7 @@ int PDFDataset::ParseProjDict(GDALPDFDictionary* poProjDict)
                 {
                     double dfSemiMinor = Get(poEllipsoidDict, "SemiMinorAxis");
                     CPLDebug("PDF", "Datum.Ellipsoid.SemiMinorAxis = %.16g", dfSemiMinor);
-                    if( ABS(dfSemiMajor/dfSemiMinor) - 1.0 < 0.0000000000001 )
-                        dfInvFlattening = 0.0;
-                    else
-                        dfInvFlattening = -1.0 / (dfSemiMinor/dfSemiMajor - 1.0);
+                    dfInvFlattening = OSRCalcInvFlattening(dfSemiMajor, dfSemiMinor);
                 }
                 
                 if( dfSemiMajor != 0.0 && dfInvFlattening != -1.0 )

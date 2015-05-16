@@ -128,7 +128,7 @@ def runexternal(cmd, strin = None, check_memleak = True, display_live_on_parent_
             ret = ''
             ret_stdout = p.stdout
             while True:
-                c = p.stdout.read(1).decode('latin1')
+                c = ret_stdout.read(1).decode('latin1')
                 if c == '':
                     break
                 ret = ret + c
@@ -139,7 +139,9 @@ def runexternal(cmd, strin = None, check_memleak = True, display_live_on_parent_
     else:
         ret = ''
 
-    p.wait()
+    waitcode = p.wait()
+    if waitcode < 0:
+        ret = ret + '\nERROR ret code = %d' % waitcode
 
     return ret
 
@@ -172,6 +174,8 @@ def runexternal_out_and_err(cmd, check_memleak = True):
     if q_stderr is not None:
         ret_stderr = q_stderr.get().decode('ascii')
 
-    p.wait()
+    waitcode = p.wait()
+    if waitcode < 0:
+        ret_stderr = ret_stderr + '\nERROR ret code = %d' % waitcode
 
     return (ret_stdout, ret_stderr)

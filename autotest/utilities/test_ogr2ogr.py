@@ -36,7 +36,6 @@ import shutil
 sys.path.append( '../pymod' )
 sys.path.append( '../ogr' )
 
-from osgeo import gdal
 from osgeo import ogr
 from osgeo import osr
 import gdaltest
@@ -705,7 +704,7 @@ def test_ogr2ogr_21():
 
     if ds is None:
         return 'fail'
-    layer_defn = ds.GetLayer(0).GetLayerDefn()
+    ds.GetLayer(0).GetLayerDefn()
     lyr = ds.GetLayer(0)
     feat = lyr.GetNextFeature()
     if feat.GetFieldAsString('name') != 'NAME' or \
@@ -736,7 +735,7 @@ def test_ogr2ogr_22():
 
     if ds is None:
         return 'fail'
-    layer_defn = ds.GetLayer(0).GetLayerDefn()
+    ds.GetLayer(0).GetLayerDefn()
     lyr = ds.GetLayer(0)
     feat = lyr.GetNextFeature()
     if feat.GetFieldAsString('name') != 'NAME' or \
@@ -766,7 +765,7 @@ def test_ogr2ogr_23():
 
     if ds is None:
         return 'fail'
-    layer_defn = ds.GetLayer(0).GetLayerDefn()
+    ds.GetLayer(0).GetLayerDefn()
     lyr = ds.GetLayer(0)
     feat = lyr.GetNextFeature()
     if feat.GetFieldAsString('name') != 'NAME' or \
@@ -1614,62 +1613,6 @@ def test_ogr2ogr_44():
     return 'success'
 
 ###############################################################################
-# Test -nlt PROMOTE_TO_MULTI for polygon/multipolygon
-
-def test_ogr2ogr_44():
-
-    if test_cli_utilities.get_ogr2ogr_path() is None:
-        return 'skip'
-
-    try:
-        os.stat('tmp/test_ogr2ogr_44_src.shp')
-        ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/test_ogr2ogr_44_src.shp')
-    except:
-        pass
-
-    try:
-        os.unlink('tmp/test_ogr2ogr_44.gml')
-        os.unlink('tmp/test_ogr2ogr_44.xsd')
-    except:
-        pass
-
-    ds = ogr.GetDriverByName('ESRI Shapefile').CreateDataSource('tmp/test_ogr2ogr_44_src.shp')
-    lyr = ds.CreateLayer('test_ogr2ogr_44_src', geom_type = ogr.wkbPolygon)
-    feat = ogr.Feature(lyr.GetLayerDefn())
-    feat.SetGeometry(ogr.CreateGeometryFromWkt('POLYGON((0 0,0 1,1 1,0 0))'))
-    lyr.CreateFeature(feat)
-    feat = ogr.Feature(lyr.GetLayerDefn())
-    feat.SetGeometry(ogr.CreateGeometryFromWkt('MULTIPOLYGON(((0 0,0 1,1 1,0 0)),((10 0,10 1,11 1,10 0)))'))
-    lyr.CreateFeature(feat)
-    ds = None
-
-    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GML tmp/test_ogr2ogr_44.gml tmp/test_ogr2ogr_44_src.shp -nlt PROMOTE_TO_MULTI')
-
-    f = open('tmp/test_ogr2ogr_44.xsd')
-    data = f.read()
-    f.close()
-
-    if data.find('type="gml:MultiPolygonPropertyType"') == -1:
-        gdaltest.post_reason('failure')
-        print(data)
-        return 'fail'
-
-    f = open('tmp/test_ogr2ogr_44.gml')
-    data = f.read()
-    f.close()
-
-    if data.find('<ogr:geometryProperty><gml:MultiPolygon><gml:polygonMember><gml:Polygon><gml:outerBoundaryIs><gml:LinearRing><gml:coordinates>0,0 0,1 1,1 0,0</gml:coordinates></gml:LinearRing></gml:outerBoundaryIs></gml:Polygon></gml:polygonMember></gml:MultiPolygon></ogr:geometryProperty>') == -1:
-        gdaltest.post_reason('failure')
-        print(data)
-        return 'fail'
-
-    ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/test_ogr2ogr_44_src.shp')
-    os.unlink('tmp/test_ogr2ogr_44.gml')
-    os.unlink('tmp/test_ogr2ogr_44.xsd')
-
-    return 'success'
-
-###############################################################################
 # Test -nlt PROMOTE_TO_MULTI for linestring/multilinestring
 
 def test_ogr2ogr_45():
@@ -2123,6 +2066,407 @@ def test_ogr2ogr_52():
 
     return 'success'
 
+###############################################################################
+# Test -mapFieldType and 64 bit integers
+
+def test_ogr2ogr_53():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_53.csv', 'wt')
+    f.write('id,i64,b,WKT\n')
+    f.write('1,123456789012,true,"POINT(0 0)"\n')
+    f.close()
+    f = open('tmp/test_ogr2ogr_53.csvt', 'wt')
+    f.write('Integer,Integer64,Integer(Boolean),String\n')
+    f.close()
+
+    # Default behaviour with a driver that declares GDAL_DMD_CREATIONFIELDDATATYPES
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f KML tmp/test_ogr2ogr_53.kml tmp/test_ogr2ogr_53.csv -mapFieldType "Integer(Boolean)=String"')
+    
+    f = open('tmp/test_ogr2ogr_53.kml', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<SimpleField name="id" type="int"></SimpleField>') < 0 or \
+       content.find('<SimpleData name="id">1</SimpleData>') < 0 or \
+       content.find('<SimpleField name="i64" type="float"></SimpleField>') < 0 or \
+       content.find('<SimpleData name="i64">123456789012</SimpleData>') < 0 or \
+       content.find('<SimpleField name="b" type="string"></SimpleField>') < 0 or \
+       content.find('<SimpleData name="b">1</SimpleData>') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_53.kml')
+
+    # Default behaviour with a driver that does not GDAL_DMD_CREATIONFIELDDATATYPES
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f BNA tmp/test_ogr2ogr_53.bna tmp/test_ogr2ogr_53.csv -nlt POINT')
+    
+    f = open('tmp/test_ogr2ogr_53.bna', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('"123456789012.0"') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_53.bna')
+
+    # with -mapFieldType
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f KML tmp/test_ogr2ogr_53.kml tmp/test_ogr2ogr_53.csv -mapFieldType Integer64=String')
+    
+    f = open('tmp/test_ogr2ogr_53.kml', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<SimpleField name="i64" type="string"></SimpleField>') < 0 or \
+       content.find('<SimpleData name="i64">123456789012</SimpleData>') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_53.kml')
+
+
+    os.unlink('tmp/test_ogr2ogr_53.csv')
+    os.unlink('tmp/test_ogr2ogr_53.csvt')
+    
+    return 'success'
+
+###############################################################################
+# Test behaviour with nullable fields
+
+def test_ogr2ogr_54():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_54.csv', 'wt')
+    f.write('fld1,fld2,WKT\n')
+    f.write('1,2,"POINT(0 0)"\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_54.vrt', 'wt')
+    f.write("""<OGRVRTDataSource>
+  <OGRVRTLayer name="test_ogr2ogr_54">
+    <SrcDataSource relativeToVRT="1" shared="1">test_ogr2ogr_54.csv</SrcDataSource>
+    <SrcLayer>test_ogr2ogr_54</SrcLayer>
+    <GeometryType>wkbUnknown</GeometryType>
+    <GeometryField name="WKT" nullable="false"/>
+    <Field name="fld1" type="String" src="fld1" nullable="no"/>
+    <Field name="fld2" type="String" src="fld2"/>
+  </OGRVRTLayer>
+</OGRVRTDataSource>
+""")
+    f.close()
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GML tmp/test_ogr2ogr_54.gml tmp/test_ogr2ogr_54.vrt')
+
+    f = open('tmp/test_ogr2ogr_54.xsd', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<xs:element name="WKT" type="gml:GeometryPropertyType" nillable="true" minOccurs="1" maxOccurs="1"/>') < 0 or \
+       content.find('<xs:element name="fld1" nillable="true" minOccurs="1" maxOccurs="1">') < 0 or \
+       content.find('<xs:element name="fld2" nillable="true" minOccurs="0" maxOccurs="1">') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_54.gml')
+    os.unlink('tmp/test_ogr2ogr_54.xsd')
+
+    # Test -forceNullable
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -forceNullable -f GML tmp/test_ogr2ogr_54.gml tmp/test_ogr2ogr_54.vrt')
+
+    f = open('tmp/test_ogr2ogr_54.xsd', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<xs:element name="geometryProperty" type="gml:GeometryPropertyType" nillable="true" minOccurs="0" maxOccurs="1"/>') < 0 or \
+       content.find('<xs:element name="fld1" nillable="true" minOccurs="0" maxOccurs="1">') < 0 or \
+       content.find('<xs:element name="fld2" nillable="true" minOccurs="0" maxOccurs="1">') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_54.gml')
+    os.unlink('tmp/test_ogr2ogr_54.xsd')
+
+    os.unlink('tmp/test_ogr2ogr_54.csv')
+    os.unlink('tmp/test_ogr2ogr_54.vrt')
+
+    return 'success'
+
+###############################################################################
+# Test behaviour with default values
+
+def test_ogr2ogr_55():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_55.csv', 'wt')
+    f.write('fld1,fld2,WKT\n')
+    f.write('1,,"POINT(0 0)"\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_55.csvt', 'wt')
+    f.write('Integer,Integer,String\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_55.vrt', 'wt')
+    f.write("""<OGRVRTDataSource>
+  <OGRVRTLayer name="test_ogr2ogr_55">
+    <SrcDataSource relativeToVRT="1" shared="1">test_ogr2ogr_55.csv</SrcDataSource>
+    <SrcLayer>test_ogr2ogr_55</SrcLayer>
+    <GeometryType>wkbUnknown</GeometryType>
+    <GeometryField name="WKT"/>
+    <Field name="fld1" type="Integer" src="fld1"/>
+    <Field name="fld2" type="Integer" src="fld2" nullable="false" default="2"/>
+  </OGRVRTLayer>
+</OGRVRTDataSource>
+""")
+    f.close()
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GML tmp/test_ogr2ogr_55.gml tmp/test_ogr2ogr_55.vrt')
+
+    f = open('tmp/test_ogr2ogr_55.gml', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<ogr:fld2>2</ogr:fld2>') < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_55.gml')
+    os.unlink('tmp/test_ogr2ogr_55.xsd')
+
+    # Test -unsetDefault
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -forceNullable -unsetDefault -f GML tmp/test_ogr2ogr_55.gml tmp/test_ogr2ogr_55.vrt')
+
+    f = open('tmp/test_ogr2ogr_55.gml', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find('<ogr:fld2>') >= 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_55.gml')
+    os.unlink('tmp/test_ogr2ogr_55.xsd')
+
+    os.unlink('tmp/test_ogr2ogr_55.csv')
+    os.unlink('tmp/test_ogr2ogr_55.csvt')
+    os.unlink('tmp/test_ogr2ogr_55.vrt')
+
+    return 'success'
+
+###############################################################################
+# Test behaviour when creatin a field with same name as FID column
+
+def test_ogr2ogr_56():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_56.csv', 'wt')
+    f.write('str,myid,WKT\n')
+    f.write('aaa,10,"POINT(0 0)"\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_56.csvt', 'wt')
+    f.write('String,Integer,String\n')
+    f.close()
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f PGDump tmp/test_ogr2ogr_56.sql tmp/test_ogr2ogr_56.csv -lco FID=myid --config PGDUMP_DEBUG_ALLOW_CREATION_FIELD_WITH_FID_NAME NO')
+
+    f = open('tmp/test_ogr2ogr_56.sql', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find("""ALTER TABLE "public"."test_ogr2ogr_56" ADD COLUMN "myid"" """) >= 0 or \
+       content.find("""INSERT INTO "public"."test_ogr2ogr_56" ("wkb_geometry" , "myid" , "str", "wkt") VALUES ('010100000000000000000000000000000000000000', 10, 'aaa', 'POINT(0 0)');""") < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_56.sql')
+    os.unlink('tmp/test_ogr2ogr_56.csv')
+    os.unlink('tmp/test_ogr2ogr_56.csvt')
+
+    return 'success'
+
+###############################################################################
+# Test default propagation of FID column name and values, and -unsetFid
+
+def test_ogr2ogr_57():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_57.csv', 'wt')
+    f.write('id,str,WKT\n')
+    f.write('10,a,"POINT(0 0)"\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_57.csvt', 'wt')
+    f.write('Integer,String,String\n')
+    f.close()
+    
+    f = open('tmp/test_ogr2ogr_57.vrt', 'wt')
+    f.write("""<OGRVRTDataSource>
+  <OGRVRTLayer name="test_ogr2ogr_57">
+    <SrcDataSource relativeToVRT="1" shared="1">test_ogr2ogr_57.csv</SrcDataSource>
+    <SrcLayer>test_ogr2ogr_57</SrcLayer>
+    <GeometryType>wkbUnknown</GeometryType>
+    <GeometryField name="WKT"/>
+    <FID name="id">id</FID>
+    <Field name="str"/>
+  </OGRVRTLayer>
+</OGRVRTDataSource>
+""")
+    f.close()
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f PGDump tmp/test_ogr2ogr_57.sql tmp/test_ogr2ogr_57.vrt')
+
+    f = open('tmp/test_ogr2ogr_57.sql', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find("""CREATE TABLE "public"."test_ogr2ogr_57" ( "id" SERIAL, CONSTRAINT "test_ogr2ogr_57_pk" PRIMARY KEY ("id") )""") < 0 or \
+       content.find("""INSERT INTO "public"."test_ogr2ogr_57" ("wkb_geometry" , "id" , "str") VALUES ('010100000000000000000000000000000000000000', 10, 'a')""") < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_57.sql')
+
+    # Test -unsetFid
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f PGDump tmp/test_ogr2ogr_57.sql tmp/test_ogr2ogr_57.vrt -unsetFid')
+
+    f = open('tmp/test_ogr2ogr_57.sql', 'rt')
+    content = f.read()
+    f.close()
+
+    if content.find("""CREATE TABLE "public"."test_ogr2ogr_57" ( OGC_FID SERIAL, CONSTRAINT "test_ogr2ogr_57_pk" PRIMARY KEY (OGC_FID) )""") < 0 or \
+       content.find("""INSERT INTO "public"."test_ogr2ogr_57" ("wkb_geometry" , "str") VALUES ('010100000000000000000000000000000000000000', 'a')""") < 0:
+        gdaltest.post_reason('fail')
+        print(content)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_57.sql')
+
+    os.unlink('tmp/test_ogr2ogr_57.csv')
+    os.unlink('tmp/test_ogr2ogr_57.csvt')
+    os.unlink('tmp/test_ogr2ogr_57.vrt')
+
+    return 'success'
+
+###############################################################################
+# Test datasource transactions
+
+def test_ogr2ogr_58():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+    if ogr.GetDriverByName('SQLite') is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -gt 3 -f SQLite tmp/test_ogr2ogr_58.sqlite ../ogr/data/poly.shp')
+
+    ds = ogr.Open('tmp/test_ogr2ogr_58.sqlite')
+    lyr = ds.GetLayer(0)
+    if lyr.GetFeatureCount() != 10:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    ogr.GetDriverByName('SQLite').DeleteDataSource('tmp/test_ogr2ogr_58.sqlite')
+
+    return 'success'
+
+###############################################################################
+# Test metadata support
+
+def test_ogr2ogr_59():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+    if ogr.GetDriverByName('GPKG') is None:
+        return 'skip'
+
+    ds = ogr.GetDriverByName('GPKG').CreateDataSource('tmp/test_ogr2ogr_59_src.gpkg')
+    ds.SetMetadataItem('FOO', 'BAR')
+    ds.SetMetadataItem('BAR', 'BAZ', 'another_domain')
+    lyr = ds.CreateLayer('mylayer')
+    lyr.SetMetadataItem('lyr_FOO', 'lyr_BAR')
+    lyr.SetMetadataItem('lyr_BAR', 'lyr_BAZ', 'lyr_another_domain')
+    ds = None
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GPKG tmp/test_ogr2ogr_59_dest.gpkg tmp/test_ogr2ogr_59_src.gpkg -mo BAZ=BAW')
+
+    ds = ogr.Open('tmp/test_ogr2ogr_59_dest.gpkg')
+    if ds.GetMetadata() != { 'FOO': 'BAR', 'BAZ': 'BAW' }:
+        gdaltest.post_reason('fail')
+        print(ds.GetMetadata())
+        return 'fail'
+    if ds.GetMetadata('another_domain') != { 'BAR': 'BAZ' }:
+        gdaltest.post_reason('fail')
+        print(ds.GetMetadata())
+        return 'fail'
+    lyr = ds.GetLayer(0)
+    if lyr.GetMetadata() != { 'lyr_FOO': 'lyr_BAR' }:
+        gdaltest.post_reason('fail')
+        print(lyr.GetMetadata())
+        return 'fail'
+    if lyr.GetMetadata('lyr_another_domain') != { 'lyr_BAR': 'lyr_BAZ' }:
+        gdaltest.post_reason('fail')
+        print(lyr.GetMetadata())
+        return 'fail'
+    ds = None
+
+    ogr.GetDriverByName('GPKG').DeleteDataSource('tmp/test_ogr2ogr_59_dest.gpkg')
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GPKG tmp/test_ogr2ogr_59_dest.gpkg tmp/test_ogr2ogr_59_src.gpkg -nomd')
+    ds = ogr.Open('tmp/test_ogr2ogr_59_dest.gpkg')
+    if ds.GetMetadata() != {}:
+        gdaltest.post_reason('fail')
+        print(ds.GetMetadata())
+        return 'fail'
+    lyr = ds.GetLayer(0)
+    if lyr.GetMetadata() != {}:
+        gdaltest.post_reason('fail')
+        print(lyr.GetMetadata())
+        return 'fail'
+    ds = None
+
+    ogr.GetDriverByName('GPKG').DeleteDataSource('tmp/test_ogr2ogr_59_dest.gpkg')
+
+    ogr.GetDriverByName('GPKG').DeleteDataSource('tmp/test_ogr2ogr_59_src.gpkg')
+
+    return 'success'
+
+###############################################################################
+# Test forced datasource transactions
+
+def test_ogr2ogr_60():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+    if ogr.GetDriverByName('FileGDB') is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -ds_transaction -f FileGDB tmp/test_ogr2ogr_60.gdb ../ogr/data/poly.shp -mapFieldType Integer64=Integer')
+
+    ds = ogr.Open('tmp/test_ogr2ogr_60.gdb')
+    lyr = ds.GetLayer(0)
+    if lyr.GetFeatureCount() != 10:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    ogr.GetDriverByName('FileGDB').DeleteDataSource('tmp/test_ogr2ogr_60.gdb')
+
+    return 'success'
+
 gdaltest_list = [
     test_ogr2ogr_1,
     test_ogr2ogr_2,
@@ -2177,6 +2521,14 @@ gdaltest_list = [
     test_ogr2ogr_50,
     test_ogr2ogr_51,
     test_ogr2ogr_52,
+    test_ogr2ogr_53,
+    test_ogr2ogr_54,
+    test_ogr2ogr_55,
+    test_ogr2ogr_56,
+    test_ogr2ogr_57,
+    test_ogr2ogr_58,
+    test_ogr2ogr_59,
+    test_ogr2ogr_60
     ]
 
 if __name__ == '__main__':

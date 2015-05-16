@@ -241,7 +241,7 @@ OGRErr OGRS57Layer::GetExtent( OGREnvelope *psExtent, int bForce )
 /************************************************************************/
 /*                          GetFeatureCount()                           */
 /************************************************************************/
-int OGRS57Layer::GetFeatureCount (int bForce)
+GIntBig OGRS57Layer::GetFeatureCount (int bForce)
 {
     
     if( !TestCapability(OLCFastFeatureCount) )
@@ -254,16 +254,16 @@ int OGRS57Layer::GetFeatureCount (int bForce)
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *OGRS57Layer::GetFeature( long nFeatureId )
+OGRFeature *OGRS57Layer::GetFeature( GIntBig nFeatureId )
 
 {
     S57Reader   *poReader = poDS->GetModule(0); // not multi-reader aware
 
-    if( poReader != NULL )
+    if( poReader != NULL && nFeatureId <= INT_MAX )
     {
         OGRFeature      *poFeature;
 
-        poFeature = poReader->ReadFeature( nFeatureId, poFeatureDefn );
+        poFeature = poReader->ReadFeature( (int)nFeatureId, poFeatureDefn );
         if( poFeature != NULL &&  poFeature->GetGeometryRef() != NULL )
             poFeature->GetGeometryRef()->assignSpatialReference(
                 GetSpatialRef() );

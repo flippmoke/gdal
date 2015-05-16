@@ -2557,8 +2557,7 @@ void MrSIDDataset::GetGTIFDefn()
                             &dfInvFlattening ) == 1 )
     {
         if( dfInvFlattening != 0.0 )
-            psDefn->SemiMinor = 
-                psDefn->SemiMajor * (1 - 1.0/dfInvFlattening);
+            psDefn->SemiMinor = OSRCalcSemiMinorFromInvFlattening(psDefn->SemiMajor, dfInvFlattening);
     }
 
 /* -------------------------------------------------------------------- */
@@ -2750,11 +2749,8 @@ char *MrSIDDataset::GetOGISDefn( GTIFDefn *psDefn )
         dfSemiMajor = SRS_WGS84_SEMIMAJOR;
         dfInvFlattening = SRS_WGS84_INVFLATTENING;
     }
-    else if( (psDefn->SemiMinor / psDefn->SemiMajor) < 0.99999999999999999
-             || (psDefn->SemiMinor / psDefn->SemiMajor) > 1.00000000000000001 )
-        dfInvFlattening = -1.0 / (psDefn->SemiMinor/psDefn->SemiMajor - 1.0);
     else
-        dfInvFlattening = 0.0; /* special flag for infinity */
+        dfInvFlattening = OSRCalcInvFlattening(psDefn->SemiMajor,psDefn->SemiMinor);
 
     oSRS.SetGeogCS( pszGeogName, pszDatumName, 
                     pszSpheroidName, dfSemiMajor, dfInvFlattening,
@@ -3400,9 +3396,9 @@ MrSIDCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
 
     delete poImageWriter;
 /* -------------------------------------------------------------------- */
-/*      Re-open dataset, and copy any auxilary pam information.         */
+/*      Re-open dataset, and copy any auxiliary pam information.         */
 /* -------------------------------------------------------------------- */
-    GDALPamDataset *poDS = (GDALPamDataset *) 
+    GDALPamDataset *poDS = (GDALPamDataset *)
         GDALOpen( pszFilename, GA_ReadOnly );
 
     if( poDS )
@@ -3529,9 +3525,9 @@ JP2CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
                   getLastStatusString( eStat ) );
         return NULL;
     }
-  
+
 /* -------------------------------------------------------------------- */
-/*      Re-open dataset, and copy any auxilary pam information.         */
+/*      Re-open dataset, and copy any auxiliary pam information.         */
 /* -------------------------------------------------------------------- */
     GDALOpenInfo oOpenInfo(pszFilename, GA_ReadOnly);
     GDALPamDataset *poDS = (GDALPamDataset*) JP2Open(&oOpenInfo);

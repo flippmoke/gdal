@@ -159,9 +159,10 @@ TABFile::~TABFile()
 
 
 /************************************************************************/
-/*                          GetFeatureCount()                           */
+/*                         GetFeatureCount()                          */
 /************************************************************************/
-int TABFile::GetFeatureCount (int bForce)
+
+GIntBig TABFile::GetFeatureCount (int bForce)
 {
     
     if( m_poFilterGeom != NULL || m_poAttrQuery != NULL || bForce)
@@ -1184,17 +1185,20 @@ int TABFile::SetQuickSpatialIndexMode(GBool bQuickSpatialIndexMode/*=TRUE*/)
  * Returns feature id that follows nPrevId, or -1 if it is the
  * last feature id.  Pass nPrevId=-1 to fetch the first valid feature id.
  **********************************************************************/
-int TABFile::GetNextFeatureId(int nPrevId)
+GIntBig TABFile::GetNextFeatureId(GIntBig nPrevId)
 {
     if( m_bLastOpWasWrite )
         ResetReading();
     m_bLastOpWasRead = TRUE;
 
+    if( (GIntBig)(int)nPrevId != nPrevId )
+        return -1;
+
     /*-----------------------------------------------------------------
      * Are we using spatial rather than .ID based traversal?
      *----------------------------------------------------------------*/
     if( bUseSpatialTraversal )
-        return m_poMAPFile->GetNextFeatureId( nPrevId );
+        return m_poMAPFile->GetNextFeatureId( (int)nPrevId );
 
     /*-----------------------------------------------------------------
      * Should we use an attribute index traversal?
@@ -1224,7 +1228,7 @@ int TABFile::GetNextFeatureId(int nPrevId)
     if (nPrevId <= 0 && m_nLastFeatureId > 0)
         nFeatureId = 1;       // Feature Ids start at 1
     else if (nPrevId > 0 && nPrevId < m_nLastFeatureId)
-        nFeatureId = nPrevId + 1;
+        nFeatureId = (int)nPrevId + 1;
     else
     {
         // This was the last feature
@@ -1309,7 +1313,7 @@ int TABFile::GetNextFeatureId_Spatial(int nPrevId)
  * and a warning will be produced with code TAB_WarningFeatureTypeNotSupported
  * CPLGetLastErrorNo() should be used to detect that case.
  **********************************************************************/
-TABFeature *TABFile::GetFeatureRef(int nFeatureId)
+TABFeature *TABFile::GetFeatureRef(GIntBig nFeatureId)
 {
     CPLErrorReset();
 
@@ -1329,8 +1333,8 @@ TABFeature *TABFile::GetFeatureRef(int nFeatureId)
     m_bLastOpWasRead = TRUE;
 
     if (nFeatureId <= 0 || nFeatureId > m_nLastFeatureId ||
-        m_poMAPFile->MoveToObjId(nFeatureId) != 0 ||
-        m_poDATFile->GetRecordBlock(nFeatureId) == NULL )
+        m_poMAPFile->MoveToObjId((int)nFeatureId) != 0 ||
+        m_poDATFile->GetRecordBlock((int)nFeatureId) == NULL )
     {
         //     CPLError(CE_Failure, CPLE_IllegalArg,
         //    "GetFeatureRef() failed: invalid feature id %d", 
@@ -1343,7 +1347,7 @@ TABFeature *TABFile::GetFeatureRef(int nFeatureId)
         if( m_poMAPFile->GetCurObjType() != TAB_GEOM_NONE )
         {
             CPLError(CE_Failure, CPLE_AppDefined,
-                    "Valid .MAP record %d found, but .DAT is marked as deleted. File likely corrupt",
+                    "Valid .MAP record " CPL_FRMT_GIB " found, but .DAT is marked as deleted. File likely corrupt",
                     nFeatureId);
         }
         return NULL;
@@ -1412,7 +1416,7 @@ TABFeature *TABFile::GetFeatureRef(int nFeatureId)
  *
  * Standard OGR DeleteFeature implementation.
  **********************************************************************/
-OGRErr TABFile::DeleteFeature(long nFeatureId)
+OGRErr TABFile::DeleteFeature(GIntBig nFeatureId)
 {
     CPLErrorReset();
 
@@ -1437,20 +1441,20 @@ OGRErr TABFile::DeleteFeature(long nFeatureId)
         ResetReading();
 
     if (nFeatureId <= 0 || nFeatureId > m_nLastFeatureId ||
-        m_poMAPFile->MoveToObjId(nFeatureId) != 0 ||
-        m_poDATFile->GetRecordBlock(nFeatureId) == NULL )
+        m_poMAPFile->MoveToObjId((int)nFeatureId) != 0 ||
+        m_poDATFile->GetRecordBlock((int)nFeatureId) == NULL )
     {
-        CPLError(CE_Failure, CPLE_IllegalArg,
-                 "DeleteFeature() failed: invalid feature id %ld", 
-                 nFeatureId);
-        return OGRERR_FAILURE;
+        /*CPLError(CE_Failure, CPLE_IllegalArg,
+                 "DeleteFeature() failed: invalid feature id " CPL_FRMT_GIB, 
+                 nFeatureId);*/
+        return OGRERR_NON_EXISTING_FEATURE;
     }
     
     if( m_poDATFile->IsCurrentRecordDeleted() )
     {
-        CPLError(CE_Failure, CPLE_IllegalArg,
-                 "DeleteFeature() failed: record is already deleted!");
-        return OGRERR_FAILURE;
+        /*CPLError(CE_Failure, CPLE_IllegalArg,
+                 "DeleteFeature() failed: record is already deleted!");*/
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
     if (m_poCurFeature)
@@ -1495,7 +1499,7 @@ int TABFile::WriteFeature(TABFeature *poFeature)
     int nFeatureId;
     if ( poFeature->GetFID() >= 0 )
     {
-        nFeatureId = poFeature->GetFID();
+        nFeatureId = (int)poFeature->GetFID();
     }
     else if (m_nLastFeatureId < 1)
     {
@@ -1626,22 +1630,22 @@ OGRErr TABFile::CreateFeature(TABFeature *poFeature)
         return OGRERR_FAILURE;
     }
 
-    long nFeatureId = poFeature->GetFID();
+    GIntBig nFeatureId = poFeature->GetFID();
     if (nFeatureId != OGRNullFID )
     {
         if (nFeatureId <= 0 || nFeatureId > m_nLastFeatureId )
         {
             CPLError(CE_Failure, CPLE_IllegalArg,
-                     "CreateFeature() failed: invalid feature id %ld", 
+                     "CreateFeature() failed: invalid feature id " CPL_FRMT_GIB, 
                       nFeatureId);
             return OGRERR_FAILURE;
         }
 
-        if( m_poDATFile->GetRecordBlock(nFeatureId) == NULL ||
+        if( m_poDATFile->GetRecordBlock((int)nFeatureId) == NULL ||
             !m_poDATFile->IsCurrentRecordDeleted() )
         {
             CPLError(CE_Failure, CPLE_IllegalArg,
-                    "CreateFeature() failed: cannot re-write already existing feature %ld", 
+                    "CreateFeature() failed: cannot re-write already existing feature " CPL_FRMT_GIB, 
                     nFeatureId);
             return OGRERR_FAILURE;
         }
@@ -1680,7 +1684,7 @@ OGRErr TABFile::ISetFeature( OGRFeature *poFeature )
         return OGRERR_FAILURE;
     }
     
-    long nFeatureId = poFeature->GetFID();
+    GIntBig nFeatureId = poFeature->GetFID();
     if (nFeatureId == OGRNullFID )
     {
         CPLError(CE_Failure, CPLE_NotSupported,
@@ -1689,10 +1693,10 @@ OGRErr TABFile::ISetFeature( OGRFeature *poFeature )
     }
     if (nFeatureId <= 0 || nFeatureId > m_nLastFeatureId )
     {
-        CPLError(CE_Failure, CPLE_IllegalArg,
-                    "SetFeature() failed: invalid feature id %ld", 
-                    nFeatureId);
-        return OGRERR_FAILURE;
+        /*CPLError(CE_Failure, CPLE_IllegalArg,
+                    "SetFeature() failed: invalid feature id " CPL_FRMT_GIB, 
+                    nFeatureId);*/
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
     OGRGeometry* poGeom = poFeature->GetGeometryRef();
@@ -1712,13 +1716,13 @@ OGRErr TABFile::ISetFeature( OGRFeature *poFeature )
     if( m_bLastOpWasWrite )
         ResetReading();
 
-    if (m_poDATFile->GetRecordBlock(nFeatureId) == NULL )
+    if (m_poDATFile->GetRecordBlock((int)nFeatureId) == NULL )
     {
-        CPLError(CE_Failure, CPLE_IllegalArg,
-                 "SetFeature() failed: invalid feature id %ld", 
-                 nFeatureId);
+        /*CPLError(CE_Failure, CPLE_IllegalArg,
+                 "SetFeature() failed: invalid feature id " CPL_FRMT_GIB, 
+                 nFeatureId);*/
         delete poTABFeature;
-        return OGRERR_FAILURE;
+        return OGRERR_NON_EXISTING_FEATURE;
     }
 
     /* If the object is not already deleted, delete it */
@@ -1730,7 +1734,7 @@ OGRErr TABFile::ISetFeature( OGRFeature *poFeature )
             /* Optimization: if old and new features are the same, do nothing */
             if( poOldFeature->Equal(poFeature) )
             {
-                CPLDebug("MITAB", "Un-modified object %ld", nFeatureId);
+                CPLDebug("MITAB", "Un-modified object " CPL_FRMT_GIB, nFeatureId);
                 delete poTABFeature;
                 delete poOldFeature;
                 return OGRERR_NONE;
@@ -1748,12 +1752,12 @@ OGRErr TABFile::ISetFeature( OGRFeature *poFeature )
                 if( (pszOldStyle == NULL && pszNewStyle == NULL) ||
                     (pszOldStyle != NULL && pszNewStyle != NULL && EQUAL(pszOldStyle, pszNewStyle)) )
                 {
-                    CPLDebug("MITAB", "Rewrite only attributes for object %ld", nFeatureId);
+                    CPLDebug("MITAB", "Rewrite only attributes for object " CPL_FRMT_GIB, nFeatureId);
                     if (poTABFeature->WriteRecordToDATFile(m_poDATFile, m_poINDFile,
                                                         m_panIndexNo) != 0 )
                     {
                         CPLError(CE_Failure, CPLE_FileIO,
-                                "Failed writing attributes for feature id %ld in %s",
+                                "Failed writing attributes for feature id " CPL_FRMT_GIB " in %s",
                                 nFeatureId, m_pszFname);
                         delete poTABFeature;
                         delete poOldFeature;

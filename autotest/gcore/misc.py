@@ -197,7 +197,7 @@ def misc_5():
         os.mkdir('tmp/tmp')
     except:
         try:
-            os.stat(dirname)
+            os.stat('tmp/tmp')
             # Hum the directory already exists... Not expected, but let's try to go on
         except:
             gdaltest.post_reason('Cannot create tmp/tmp')
@@ -364,7 +364,7 @@ def misc_6():
         os.mkdir('tmp/tmp')
     except:
         try:
-            os.stat(dirname)
+            os.stat('tmp/tmp')
             # Hum the directory already exists... Not expected, but let's try to go on
         except:
             gdaltest.post_reason('Cannot create tmp/tmp')
@@ -412,13 +412,9 @@ def misc_7():
 
     gt = (10, 0.1, 0, 20, 0, -1.0)
     res = gdal.InvGeoTransform(gt)
-    if res[0] != 1:
-        print(res)
-        return 'fail'
-
     expected_inv_gt = (-100.0, 10.0, 0.0, 20.0, 0.0, -1.0)
     for i in range(6):
-        if abs(res[1][i] - expected_inv_gt[i]) > 1e-6:
+        if abs(res[i] - expected_inv_gt[i]) > 1e-6:
             print(res)
             return 'fail'
 
@@ -568,13 +564,17 @@ def misc_12():
             gdal.PushErrorHandler('CPLQuietErrorHandler')
             ds = drv.CreateCopy('/nonexistingpath/nonexistingfile' + ext, src_ds)
             gdal.PopErrorHandler()
+            if ds is None and gdal.GetLastErrorMsg() == '':
+                gdaltest.post_reason('failure')
+                print('CreateCopy() into non existing dir fails without error message for driver %s' % drv.ShortName)
+                return 'fail'
             ds = None
 
             if gdal_translate_path is not None:
                 # Test to detect memleaks
                 ds = gdal.GetDriverByName('VRT').CreateCopy('tmp/misc_12.vrt', src_ds)
                 (out, err) = gdaltest.runexternal_out_and_err(gdal_translate_path + ' -of ' + drv.ShortName + ' tmp/misc_12.vrt /nonexistingpath/nonexistingfile' + ext, check_memleak = False)
-                ds = None
+                del ds
                 gdal.Unlink('tmp/misc_12.vrt')
 
                 # If DEBUG_VSIMALLOC_STATS is defined, this is an easy way
@@ -589,6 +589,31 @@ def misc_12():
             src_ds = None
 
             gdal.Unlink('/vsimem/misc_12_src.tif')
+
+    return 'success'
+
+###############################################################################
+# Test CreateCopy() with incompatible driver types (#5912)
+
+def misc_13():
+
+    # Raster-only -> vector-only
+    ds = gdal.Open('data/byte.tif')
+    gdal.PushErrorHandler()
+    out_ds = gdal.GetDriverByName('ESRI Shapefile').CreateCopy('/vsimem/out.shp', ds)
+    gdal.PopErrorHandler()
+    if out_ds is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Raster-only -> vector-only
+    ds = gdal.OpenEx('../ogr/data/poly.shp', gdal.OF_VECTOR)
+    gdal.PushErrorHandler()
+    out_ds = gdal.GetDriverByName('GTiff').CreateCopy('/vsimem/out.tif', ds)
+    gdal.PopErrorHandler()
+    if out_ds is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
 
     return 'success'
 
@@ -614,6 +639,7 @@ gdaltest_list = [ misc_1,
                   misc_10,
                   misc_11,
                   misc_12,
+                  misc_13,
                   misc_cleanup ]
 
 if __name__ == '__main__':

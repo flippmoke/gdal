@@ -89,6 +89,10 @@ typedef struct OGRStyleTableHS OGRStyleTableShadow;
 %}
 #endif /* #if defined(SWIGPYTHON) || defined(SWIGJAVA) */
 
+#if defined(SWIGCSHARP)
+typedef int OGRErr;
+#endif
+
 %{
 /* use this to not return the int returned by GDAL */
 typedef int RETURN_NONE;
@@ -332,7 +336,12 @@ $1;
 %rename (DecToPackedDMS) GDALDecToPackedDMS;
 %rename (ParseXMLString) CPLParseXMLString;
 %rename (SerializeXMLTree) CPLSerializeXMLTree;
+%rename (GetJPEG2000Structure) GDALGetJPEG2000Structure;
 #endif
+#ifdef SWIGPERL
+%include "gdal_perl_rename.i"
+#endif
+
 
 //************************************************************************
 //
@@ -453,9 +462,10 @@ void GDAL_GCP_Id_set( GDAL_GCP *gcp, const char * pszId ) {
     CPLFree( gcp->pszId );
   gcp->pszId = CPLStrdup(pszId);
 }
+%} //%inline 
 
-
-
+#if defined(SWIGCSHARP)
+%inline %{
 /* Duplicate, but transposed names for C# because 
 *  the C# module outputs backwards names
 */
@@ -505,8 +515,9 @@ void GDAL_GCP_set_Id( GDAL_GCP *gcp, const char * pszId ) {
     CPLFree( gcp->pszId );
   gcp->pszId = CPLStrdup(pszId);
 }
-
 %} //%inline 
+#endif //if defined(SWIGCSHARP)
+
 %clear GDAL_GCP *gcp;
 
 #ifdef SWIGJAVA
@@ -575,7 +586,14 @@ void GDALApplyGeoTransform( double padfGeoTransform[6],
 
 %apply (double argin[ANY]) {double gt_in[6]};
 %apply (double argout[ANY]) {double gt_out[6]};
+#ifdef SWIGJAVA
+// FIXME: we should implement correctly the IF_FALSE_RETURN_NONE typemap
 int GDALInvGeoTransform( double gt_in[6], double gt_out[6] );
+#else
+%apply (IF_FALSE_RETURN_NONE) { (RETURN_NONE) };
+RETURN_NONE GDALInvGeoTransform( double gt_in[6], double gt_out[6] );
+%clear (RETURN_NONE);
+#endif
 %clear (double *gt_in);
 %clear (double *gt_out);
 
@@ -598,7 +616,6 @@ void GDALAllRegister();
 void GDALDestroyDriverManager();
 
 #ifdef SWIGPYTHON
-%apply (GIntBig bigint) { GIntBig };
 %inline {
 GIntBig wrapper_GDALGetCacheMax()
 {
@@ -685,6 +702,24 @@ retStringAndCPLFree *CPLSerializeXMLTree( CPLXMLNode *xmlnode );
 #else
 char *CPLSerializeXMLTree( CPLXMLNode *xmlnode );
 #endif
+
+#if defined(SWIGPYTHON)
+%newobject GDALGetJPEG2000Structure;
+CPLXMLNode *GDALGetJPEG2000Structure( const char* pszFilename, char** options = NULL );
+#endif
+
+%inline {
+retStringAndCPLFree *GetJPEG2000StructureAsString( const char* pszFilename, char** options = NULL )
+{
+    CPLXMLNode* psNode = GDALGetJPEG2000Structure(pszFilename, options);
+    if( psNode == NULL )
+        return NULL;
+    char* pszXML = CPLSerializeXMLTree(psNode);
+    CPLDestroyXMLNode(psNode);
+    return pszXML;
+}
+}
+
 
 //************************************************************************
 //

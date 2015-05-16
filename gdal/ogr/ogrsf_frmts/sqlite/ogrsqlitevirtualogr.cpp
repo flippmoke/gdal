@@ -30,6 +30,7 @@
 #include "ogrsqlitevirtualogr.h"
 #include "ogr_api.h"
 #include "swq.h"
+#include "ogr_p.h"
 #include <map>
 #include <vector>
 
@@ -316,9 +317,9 @@ typedef struct
     /* In which case nNextWishedIndex and nCurFeatureIndex */
     /* will be used to avoid useless GetNextFeature() */
     /* Helps in SELECT COUNT(*) FROM xxxx scenarios */
-    int            nFeatureCount;
-    int            nNextWishedIndex;
-    int            nCurFeatureIndex;
+    GIntBig        nFeatureCount;
+    GIntBig        nNextWishedIndex;
+    GIntBig        nCurFeatureIndex;
 
     GByte         *pabyGeomBLOB;
     int            nGeomBLOBLen;
@@ -948,24 +949,9 @@ int OGR2SQLITE_Filter(sqlite3_vtab_cursor* pCursor,
 
             if( bNeedsQuoting )
             {
-                /* FIXME: we would need some virtual method */
-                const char* pszDriverName = pMyCursor->pVTab->poDS->GetDriverName();
-                char chQuote;
-
-                if (pszDriverName != NULL && (
-                    EQUAL(pszDriverName, "PostgreSQL") ||
-                    EQUAL(pszDriverName, "SQLite") ||
-                    EQUAL(pszDriverName, "FileGDB" )) )
-                    chQuote = '"';
-                else
-                    chQuote = '\'';
-
-                osAttributeFilter += chQuote;
-                if( chQuote == '"' )
-                    osAttributeFilter += OGRSQLiteEscapeName(pszFieldName);
-                else
-                    osAttributeFilter += OGRSQLiteEscape(pszFieldName);
-                osAttributeFilter += chQuote;
+                osAttributeFilter += '"';
+                osAttributeFilter += OGRSQLiteEscapeName(pszFieldName);
+                osAttributeFilter += '"';
             }
             else
             {
@@ -1045,8 +1031,8 @@ int OGR2SQLITE_Filter(sqlite3_vtab_cursor* pCursor,
     {
         pMyCursor->poFeature = pMyCursor->poLayer->GetNextFeature();
 #ifdef DEBUG_OGR2SQLITE
-        CPLDebug("OGR2SQLITE", "GetNextFeature() --> %d",
-            pMyCursor->poFeature ? (int)pMyCursor->poFeature->GetFID() : -1);
+        CPLDebug("OGR2SQLITE", "GetNextFeature() --> " CPL_FRMT_GIB,
+            pMyCursor->poFeature ? pMyCursor->poFeature->GetFID() : -1);
 #endif
     }
 
@@ -1079,8 +1065,8 @@ int OGR2SQLITE_Next(sqlite3_vtab_cursor* pCursor)
         pMyCursor->nGeomBLOBLen = -1;
 
 #ifdef DEBUG_OGR2SQLITE
-        CPLDebug("OGR2SQLITE", "GetNextFeature() --> %d",
-            pMyCursor->poFeature ? (int)pMyCursor->poFeature->GetFID() : -1);
+        CPLDebug("OGR2SQLITE", "GetNextFeature() --> " CPL_FRMT_GIB,
+            pMyCursor->poFeature ? pMyCursor->poFeature->GetFID() : -1);
 #endif
     }
     return SQLITE_OK;
@@ -1125,8 +1111,8 @@ static void OGR2SQLITE_GoToWishedIndex(OGR2SQLITE_vtab_cursor* pMyCursor)
                 delete pMyCursor->poFeature;
                 pMyCursor->poFeature = pMyCursor->poLayer->GetNextFeature();
 #ifdef DEBUG_OGR2SQLITE
-                CPLDebug("OGR2SQLITE", "GetNextFeature() --> %d",
-                    pMyCursor->poFeature ? (int)pMyCursor->poFeature->GetFID() : -1);
+                CPLDebug("OGR2SQLITE", "GetNextFeature() --> " CPL_FRMT_GIB,
+                    pMyCursor->poFeature ? pMyCursor->poFeature->GetFID() : -1);
 #endif
             }
             while( pMyCursor->nCurFeatureIndex < pMyCursor->nNextWishedIndex );
@@ -1283,6 +1269,11 @@ int OGR2SQLITE_Column(sqlite3_vtab_cursor* pCursor,
                                poFeature->GetFieldAsInteger(nCol));
             break;
 
+        case OFTInteger64:
+            sqlite3_result_int64(pContext,
+                               poFeature->GetFieldAsInteger64(nCol));
+            break;
+
         case OFTReal:
             sqlite3_result_double(pContext,
                                   poFeature->GetFieldAsDouble(nCol));
@@ -1298,15 +1289,9 @@ int OGR2SQLITE_Column(sqlite3_vtab_cursor* pCursor,
 
         case OFTDateTime:
         {
-            int nYear, nMonth, nDay, nHour, nMinute, nSecond, nTZ;
-            poFeature->GetFieldAsDateTime(nCol, &nYear, &nMonth, &nDay,
-                                          &nHour, &nMinute, &nSecond, &nTZ);
-            char szBuffer[64];
-            sprintf(szBuffer, "%04d-%02d-%02dT%02d:%02d:%02d",
-                    nYear, nMonth, nDay, nHour, nMinute, nSecond);
-            sqlite3_result_text(pContext,
-                                szBuffer,
-                                -1, SQLITE_TRANSIENT);
+            char* pszStr = OGRGetXMLDateTime(poFeature->GetRawFieldRef(nCol));
+            sqlite3_result_text(pContext, pszStr, -1, SQLITE_TRANSIENT);
+            CPLFree(pszStr);
             break;
         }
 
@@ -1316,7 +1301,7 @@ int OGR2SQLITE_Column(sqlite3_vtab_cursor* pCursor,
             poFeature->GetFieldAsDateTime(nCol, &nYear, &nMonth, &nDay,
                                           &nHour, &nMinute, &nSecond, &nTZ);
             char szBuffer[64];
-            sprintf(szBuffer, "%04d-%02d-%02dT", nYear, nMonth, nDay);
+            sprintf(szBuffer, "%04d-%02d-%02d", nYear, nMonth, nDay);
             sqlite3_result_text(pContext,
                                 szBuffer,
                                 -1, SQLITE_TRANSIENT);
@@ -1325,11 +1310,15 @@ int OGR2SQLITE_Column(sqlite3_vtab_cursor* pCursor,
 
         case OFTTime:
         {
-            int nYear, nMonth, nDay, nHour, nMinute, nSecond, nTZ;
+            int nYear, nMonth, nDay, nHour, nMinute, nTZ;
+            float fSecond;
             poFeature->GetFieldAsDateTime(nCol, &nYear, &nMonth, &nDay,
-                                          &nHour, &nMinute, &nSecond, &nTZ);
+                                        &nHour, &nMinute, &fSecond, &nTZ );
             char szBuffer[64];
-            sprintf(szBuffer, "%02d:%02d:%02d", nHour, nMinute, nSecond);
+            if( OGR_GET_MS(fSecond) != 0 )
+                sprintf(szBuffer, "%02d:%02d:%06.3f", nHour, nMinute, fSecond);
+            else
+                sprintf(szBuffer, "%02d:%02d:%02d", nHour, nMinute, (int)fSecond);
             sqlite3_result_text(pContext,
                                 szBuffer,
                                 -1, SQLITE_TRANSIENT);
@@ -1422,8 +1411,7 @@ static OGRFeature* OGR2SQLITE_FeatureFromArgs(OGRLayer* poLayer,
         switch( sqlite3_value_type(argv[2 + i]) )
         {
             case SQLITE_INTEGER:
-                //FIXME use int64 when OGR has 64bit integer support
-                poFeature->SetField(i, sqlite3_value_int(argv[2 + i]));
+                poFeature->SetField(i, sqlite3_value_int64(argv[2 + i]));
                 break;
             case SQLITE_FLOAT:
                 poFeature->SetField(i, sqlite3_value_double(argv[2 + i]));
@@ -2242,7 +2230,7 @@ int OGR2SQLITESpatialIndex_Column(sqlite3_vtab_cursor* pCursor,
 
     if( nCol == 0 )
     {
-        CPLDebug("OGR2SQLITE", "--> FID = %ld", poFeature->GetFID());
+        CPLDebug("OGR2SQLITE", "--> FID = " CPL_FRMT_GIB, poFeature->GetFID());
         sqlite3_result_int64(pContext, poFeature->GetFID());
         return SQLITE_OK;
     }

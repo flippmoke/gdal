@@ -51,7 +51,9 @@ typedef enum {
     GMLPT_Boolean = 10,
     GMLPT_BooleanList = 11,
     GMLPT_Short = 12,
-    GMLPT_Float = 13
+    GMLPT_Float = 13,
+    GMLPT_Integer64 = 14,
+    GMLPT_Integer64List = 15
 } GMLPropertyType;
 
 /************************************************************************/
@@ -74,6 +76,7 @@ class CPL_DLL GMLPropertyDefn
     char             *m_pszSrcElement;
     size_t            m_nSrcElementLen;
     char             *m_pszCondition;
+    int               m_bNullable;
 
 public:
     
@@ -94,6 +97,9 @@ public:
 
     void        SetCondition( const char *pszCondition );
     const char *GetCondition() const { return m_pszCondition; }
+    
+    void        SetNullable( int bNullable ) { m_bNullable = bNullable; }
+    int         IsNullable() const { return m_bNullable; }
 
     void        AnalysePropertyValue( const GMLProperty* psGMLProperty,
                                       int bSetWidth = TRUE );
@@ -112,10 +118,12 @@ class CPL_DLL GMLGeometryPropertyDefn
     char       *m_pszSrcElement;
     int         m_nGeometryType;
     int         m_nAttributeIndex;
+    int         m_bNullable;
     
 public:
         GMLGeometryPropertyDefn( const char *pszName, const char *pszSrcElement,
-                                 int nType, int nAttributeIndex = -1 );
+                                 int nType, int nAttributeIndex,
+                                 int bNullable );
        ~GMLGeometryPropertyDefn();
 
         const char *GetName() const { return m_pszName; } 
@@ -125,6 +133,8 @@ public:
         const char *GetSrcElement() const { return m_pszSrcElement; }
         
         int GetAttributeIndex() const { return m_nAttributeIndex; }
+
+        int IsNullable() const { return m_bNullable; }
 };
 
 /************************************************************************/
@@ -144,7 +154,7 @@ class CPL_DLL GMLFeatureClass
 
     int         m_bSchemaLocked;
 
-    int         m_nFeatureCount;
+    GIntBig     m_nFeatureCount;
 
     char        *m_pszExtraInfo;
 
@@ -173,10 +183,12 @@ public:
     GMLPropertyDefn *GetProperty( const char *pszName ) const 
         { return GetProperty( GetPropertyIndex(pszName) ); }
     int         GetPropertyIndexBySrcElement( const char *pszElement, int nLen ) const;
-    
+    void        StealProperties();
+
     int         GetGeometryPropertyCount() const { return m_nGeometryPropertyCount; }
     GMLGeometryPropertyDefn *GetGeometryProperty( int iIndex ) const;
     int         GetGeometryPropertyIndexBySrcElement( const char *pszElement ) const;
+    void        StealGeometryProperties();
 
     int         HasFeatureProperties();
 
@@ -190,8 +202,8 @@ public:
     const char  *GetExtraInfo();
     void        SetExtraInfo( const char * );
 
-    int         GetFeatureCount();
-    void        SetFeatureCount( int );
+    GIntBig     GetFeatureCount();
+    void        SetFeatureCount( GIntBig );
 
     int         HasExtents() const { return m_bHaveExtents; }
     void        SetExtents( double dfXMin, double dfXMax, 
@@ -290,7 +302,9 @@ public:
                                    int pbSqlitIsTempFile,
                                    int iSqliteCacheMB ) = 0;
 
-    virtual int PrescanForSchema( int bGetExtents = TRUE, int bAnalyzeSRSPerFeature = TRUE ) = 0;
+    virtual int PrescanForSchema( int bGetExtents = TRUE,
+                                  int bAnalyzeSRSPerFeature = TRUE,
+                                  int bOnlyDetectSRS = FALSE ) = 0;
     virtual int PrescanForTemplate( void ) = 0;
 
     virtual int HasStoppedParsing() = 0;

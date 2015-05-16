@@ -31,12 +31,10 @@
 
 import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
 import gdaltest
-import ogrtest
 from osgeo import ogr
 from osgeo import osr
 from osgeo import gdal
@@ -122,6 +120,13 @@ def ogr_georss_test_atom(filename):
 def ogr_georss_1():
 
     return ogr_georss_test_atom('data/atom_rfc_sample.xml')
+
+###############################################################################
+# Test reading an ATOM document with atom: prefiw
+
+def ogr_georss_1_atom_ns():
+
+    return ogr_georss_test_atom('data/atom_rfc_sample_atom_ns.xml')
 
 ###############################################################################
 # Test writing a Atom 1.0 document (doesn't need read support)
@@ -435,7 +440,7 @@ def ogr_georss_10():
         lyr = None
     gdal.PopErrorHandler()
     if lyr is not None:
-        gdal.post_reason('should not have accepted EPSG:32631 with GEOM_DIALECT != GML')
+        gdaltest.post_reason('should not have accepted EPSG:32631 with GEOM_DIALECT != GML')
         return 'fail'
 
     ds.Destroy()
@@ -682,6 +687,7 @@ def ogr_georss_cleanup():
 gdaltest_list = [ 
     ogr_georss_init,
     ogr_georss_1,
+    ogr_georss_1_atom_ns,
     ogr_georss_1bis,
     ogr_georss_1ter,
     ogr_georss_2,

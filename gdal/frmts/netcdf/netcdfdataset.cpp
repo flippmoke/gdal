@@ -83,7 +83,7 @@ void CopyMetadata( void  *poDS, int fpImage, int CDFVarID,
 // uncomment this for more debug ouput
 // #define NCDF_DEBUG 1
 
-void *hNCMutex = NULL;
+CPLMutex *hNCMutex = NULL;
 
 /************************************************************************/
 /* ==================================================================== */
@@ -447,6 +447,15 @@ netCDFRasterBand::netCDFRasterBand( netCDFDataset *poNCDFDS,
         }
 	} 		
 #endif
+
+/* -------------------------------------------------------------------- */
+/*      Force block size to 1 scanline for bottom-up datasets if        */
+/*      nBlockYSize != 1                                                */
+/* -------------------------------------------------------------------- */
+    if( poNCDFDS->bBottomUp && nBlockYSize != 1 ) {
+        nBlockXSize = nRasterXSize;
+        nBlockYSize = 1;
+    }
 }
 
 /* constructor in create mode */
@@ -1990,8 +1999,8 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
                         if( dfSemiMajorAxis < 0.0 )
                             dfSemiMajorAxis = dfEarthRadius;
                         //set inv_flat using semi_minor/major
-                        dfInverseFlattening = 
-                            1.0 / ( dfSemiMajorAxis - dfSemiMinorAxis ) / dfSemiMajorAxis;
+                        dfInverseFlattening = OSRCalcInvFlattening(dfSemiMajorAxis, dfSemiMinorAxis);
+
                         oSRS.SetGeogCS( "unknown", 
                                         NULL, 
                                         "Spheroid", 
@@ -4246,7 +4255,29 @@ CPL_UNUSED
     if ( poOpenInfo->nHeaderBytes < 4 )
         return NCDF_FORMAT_NONE;
     if ( EQUALN((char*)poOpenInfo->pabyHeader,"CDF\001",4) )
+    {
+        /* In case the netCDF driver is registered before the GMT driver, */
+        /* avoid opening GMT files */
+        if( GDALGetDriverByName("GMT") != NULL )
+        {
+            int bFoundZ = FALSE, bFoundDimension = FALSE;
+            for(int i=0;i<poOpenInfo->nHeaderBytes - 11;i++)
+            {
+                if( poOpenInfo->pabyHeader[i] == 1 &&
+                    poOpenInfo->pabyHeader[i+1] == 'z' &&
+                    poOpenInfo->pabyHeader[i+2] == 0  )
+                    bFoundZ = TRUE;
+                else if( poOpenInfo->pabyHeader[i] == 9 &&
+                        memcmp((const char*)poOpenInfo->pabyHeader + i + 1, "dimension", 9) == 0 &&
+                        poOpenInfo->pabyHeader[i+10] == 0 )
+                    bFoundDimension = TRUE;
+            }
+            if( bFoundZ && bFoundDimension )
+                return NCDF_FORMAT_UNKNOWN;
+        }
+
         return NCDF_FORMAT_NC;
+    }
     else if ( EQUALN((char*)poOpenInfo->pabyHeader,"CDF\002",4) )
         return NCDF_FORMAT_NC2;
     else if ( EQUALN((char*)poOpenInfo->pabyHeader,"\211HDF\r\n\032\n",8) ) {
@@ -4607,7 +4638,8 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
             if ( papszTokens) CSLDestroy( papszTokens );
             CPLFree( pszTemp );
         }
-        if ( NCDFGetAttr( cdfid, j, "bounds", &pszTemp ) == CE_None ) { 
+        if ( NCDFGetAttr( cdfid, j, "bounds", &pszTemp ) == CE_None &&
+             pszTemp != NULL ) { 
             if ( !EQUAL( pszTemp, "" ) )
                 papszIgnoreVars = CSLAddString( papszIgnoreVars, pszTemp );
             CPLFree( pszTemp );
@@ -6840,7 +6872,7 @@ int NCDFDoesVarContainAttribVal( int nCdfId,
 
     for( int i=0; !bFound && i<CSLCount((char**)papszAttribNames); i++ ) {
         if ( NCDFGetAttr( nCdfId, nVarId, papszAttribNames[i], &pszTemp ) 
-             == CE_None ) { 
+             == CE_None && pszTemp != NULL ) { 
             if ( bStrict ) {
                 if ( EQUAL( pszTemp, papszAttribValues[i] ) )
                     bFound=TRUE;
@@ -6871,7 +6903,7 @@ int NCDFDoesVarContainAttribVal2( int nCdfId,
     if ( nVarId == -1 ) return -1;
 
     if ( NCDFGetAttr( nCdfId, nVarId, papszAttribName, &pszTemp ) 
-         != CE_None ) return FALSE;
+         != CE_None || pszTemp == NULL ) return FALSE;
 
     for( int i=0; !bFound && i<CSLCount((char**)papszAttribValues); i++ ) {
         if ( bStrict ) {

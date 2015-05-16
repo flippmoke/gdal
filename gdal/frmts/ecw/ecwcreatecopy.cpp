@@ -92,11 +92,13 @@ public:
                         GDALDataType eType, 
                         const char *pszWKT, double *padfGeoTransform,
                         int nGCPCount, const GDAL_GCP *pasGCPList,
-                        int bIsJPEG2000, int bPixelIsPoint );
+                        int bIsJPEG2000, int bPixelIsPoint, char** papszRPCMD,
+                        GDALDataset* poSrcDS = NULL );
     CPLErr  CloseDown();
 
     CPLErr  PrepareCoverageBox( const char *pszWKT, double *padfGeoTransform );
     CPLErr  WriteJP2Box( GDALJP2Box * );
+    void    WriteXMLBoxes();
     CPLErr  WriteLineBIL(UINT16 nBands, void **ppOutputLine, UINT32 *pLineSteps = NULL);
     virtual NCSEcwCellType WriteReadLineGetCellType() {
         return sFileInfo.eCellType;
@@ -496,6 +498,21 @@ CPLErr GDALECWCompressor::WriteJP2Box( GDALJP2Box * poBox )
 }
 
 /************************************************************************/
+/*                         WriteXMLBoxes()                              */
+/************************************************************************/
+
+void GDALECWCompressor::WriteXMLBoxes()
+{
+    int nBoxes = 0;
+    GDALJP2Box** papoBoxes = GDALJP2Metadata::CreateXMLBoxes(m_poSrcDS, &nBoxes);
+    for(int i=0;i<nBoxes;i++)
+    {
+        WriteJP2Box(papoBoxes[i]);
+    }
+    CPLFree(papoBoxes);
+}
+
+/************************************************************************/
 /*                            WriteLineBIL()                            */
 /************************************************************************/
 
@@ -522,7 +539,8 @@ CPLErr GDALECWCompressor::Initialize(
     GDALDataType eType, 
     const char *pszWKT, double *padfGeoTransform,
     int nGCPCount, const GDAL_GCP *pasGCPList,
-    int bIsJPEG2000, int bPixelIsPoint )
+    int bIsJPEG2000, int bPixelIsPoint, char** papszRPCMD,
+    GDALDataset* poSrcDS )
 
 {
      const char *pszOption;
@@ -928,7 +946,7 @@ CPLErr GDALECWCompressor::Initialize(
           padfGeoTransform[3] == 0.0 &&
           padfGeoTransform[4] == 0.0 &&
           padfGeoTransform[5] == 1.0) ||
-         nGCPCount > 0 )
+         nGCPCount > 0  || papszRPCMD != NULL )
     {
         GDALJP2Metadata oJP2MD;
 
@@ -936,14 +954,33 @@ CPLErr GDALECWCompressor::Initialize(
         oJP2MD.SetGeoTransform( padfGeoTransform );
         oJP2MD.SetGCPs( nGCPCount, pasGCPList );
         oJP2MD.bPixelIsPoint = bPixelIsPoint;
+        oJP2MD.SetRPCMD( papszRPCMD );
 
         if (bIsJPEG2000) {
-
+            if( CSLFetchBoolean(papszOptions, "WRITE_METADATA", FALSE) )
+            {
+                if( !CSLFetchBoolean(papszOptions, "MAIN_MD_DOMAIN_ONLY", FALSE) )
+                {
+                    WriteXMLBoxes();
+                }
+                WriteJP2Box(GDALJP2Metadata::CreateGDALMultiDomainMetadataXMLBox(
+                        m_poSrcDS, CSLFetchBoolean(papszOptions, "MAIN_MD_DOMAIN_ONLY", FALSE)));
+            }
             if( CSLFetchBoolean( papszOptions, "GMLJP2", TRUE ) )
-                WriteJP2Box( oJP2MD.CreateGMLJP2(nXSize,nYSize) );
+            {
+                const char* pszGMLJP2V2Def = CSLFetchNameValue( papszOptions, "GMLJP2V2_DEF" );
+                if( pszGMLJP2V2Def != NULL )
+                    WriteJP2Box( oJP2MD.CreateGMLJP2V2(nXSize,nYSize,pszGMLJP2V2Def,poSrcDS) );
+                else
+                    WriteJP2Box( oJP2MD.CreateGMLJP2(nXSize,nYSize) );
+            }
             if( CSLFetchBoolean( papszOptions, "GeoJP2", TRUE ) )
                 WriteJP2Box( oJP2MD.CreateJP2GeoTIFF() );
-
+            if( CSLFetchBoolean(papszOptions, "WRITE_METADATA", FALSE) &&
+                !CSLFetchBoolean(papszOptions, "MAIN_MD_DOMAIN_ONLY", FALSE) )
+            {
+                WriteJP2Box(GDALJP2Metadata::CreateXMPBox(m_poSrcDS));
+            }
         }
     }
 /* -------------------------------------------------------------------- */
@@ -1216,7 +1253,9 @@ ECWCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
                                 eType, pszWKT, adfGeoTransform, 
                                 poSrcDS->GetGCPCount(), 
                                 poSrcDS->GetGCPs(),
-                                bIsJPEG2000, bPixelIsPoint )
+                                bIsJPEG2000, bPixelIsPoint,
+                                poSrcDS->GetMetadata("RPC"),
+                                poSrcDS )
         != CE_None )
     {
         for (i=0;i<nBands;i++)
@@ -1246,7 +1285,7 @@ ECWCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     pfnProgress( 1.001, NULL, pProgressData );
 
 /* -------------------------------------------------------------------- */
-/*      Re-open dataset, and copy any auxilary pam information.         */
+/*      Re-open dataset, and copy any auxiliary pam information.         */
 /* -------------------------------------------------------------------- */
     GDALOpenInfo oOpenInfo(pszFilename, GA_ReadOnly);
     GDALPamDataset *poDS;
@@ -1266,7 +1305,7 @@ ECWCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
             }
             double dHistMin, dHistMax;
             int nBuckets;
-            int *pHistogram;
+            GUIntBig *pHistogram;
             if (poSrcDS->GetRasterBand(i)->GetDefaultHistogram(&dHistMin, &dHistMax,&nBuckets,&pHistogram, FALSE, NULL, NULL) == CE_None){
                 poDS->GetRasterBand(i)->SetDefaultHistogram(dHistMin, dHistMax, nBuckets, pHistogram);
                 VSIFree(pHistogram);
@@ -1275,7 +1314,11 @@ ECWCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
 #endif
 
         ((ECWDataset *)poDS)->SetPreventCopyingSomeMetadata(TRUE);
-        poDS->CloneInfo( poSrcDS, GCIF_PAM_DEFAULT );
+        int nFlags = GCIF_PAM_DEFAULT;
+        if( bIsJPEG2000 &&
+            !CSLFetchBoolean(papszOptions, "WRITE_METADATA", FALSE) )
+            nFlags &= ~GCIF_METADATA;
+        poDS->CloneInfo( poSrcDS, nFlags );
         ((ECWDataset *)poDS)->SetPreventCopyingSomeMetadata(FALSE);
     }
 
@@ -1753,7 +1796,7 @@ CPLErr ECWWriteDataset::Crystalize()
                                    eDataType, 
                                    pszProjection, adfGeoTransform, 
                                    0, NULL,
-                                   bIsJPEG2000, FALSE );
+                                   bIsJPEG2000, FALSE, NULL );
 
     if( eErr == CE_None )
         bCrystalized = TRUE;

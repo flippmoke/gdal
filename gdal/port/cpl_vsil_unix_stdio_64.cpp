@@ -108,7 +108,7 @@ class VSIUnixStdioFilesystemHandler : public VSIFilesystemHandler
 {
 #ifdef VSI_COUNT_BYTES_READ
     vsi_l_offset  nTotalBytesRead;
-    void         *hMutex;
+    CPLMutex     *hMutex;
 #endif
 
 public:
@@ -354,7 +354,12 @@ size_t VSIUnixStdioHandle::Read( void * pBuffer, size_t nSize, size_t nCount )
 
     if (nResult != nCount)
     {
-        nOffset = VSI_FTELL64( fp );
+        errno = 0;
+        vsi_l_offset nNewOffset = VSI_FTELL64( fp );
+        if( errno == 0 ) /* ftell() can fail if we are end of file with a pipe */
+            nOffset = nNewOffset;
+        else
+            CPLDebug("VSI", "%s", VSIStrerror(errno));
         bAtEOF = feof(fp);
     }
 

@@ -116,9 +116,12 @@ void OGRAVCBinLayer::ResetReading()
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *OGRAVCBinLayer::GetFeature( long nFID )
+OGRFeature *OGRAVCBinLayer::GetFeature( GIntBig nFID )
 
 {
+    if( (GIntBig)(int)nFID != nFID )
+        return NULL;
+
 /* -------------------------------------------------------------------- */
 /*      If we haven't started yet, open the file now.                   */
 /* -------------------------------------------------------------------- */
@@ -150,7 +153,7 @@ OGRFeature *OGRAVCBinLayer::GetFeature( long nFID )
     else
     {
         bNeedReset = TRUE;
-        pFeature = AVCBinReadObject( hFile, nFID );
+        pFeature = AVCBinReadObject( hFile, (int)nFID );
     }
         
     if( pFeature == NULL )
@@ -424,7 +427,7 @@ int OGRAVCBinLayer::AppendTableFields( OGRFeature *poFeature )
     void *hRecord;
 
     if( nTableAttrIndex == -1 )
-        nRecordId = poFeature->GetFID();
+        nRecordId = (int) poFeature->GetFID();
     else
         nRecordId = poFeature->GetFieldAsInteger( nTableAttrIndex );
 

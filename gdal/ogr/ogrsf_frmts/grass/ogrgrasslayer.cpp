@@ -278,7 +278,7 @@ bool OGRGRASSLayer::StartDbDriver()
     if ( poDriver == NULL) 
     {
 	CPLError( CE_Failure, CPLE_AppDefined, "Cannot open database %s by driver %s, "
-		  "check if GISBASE enviroment variable is set, the driver is available "
+		  "check if GISBASE environment variable is set, the driver is available "
 		  " and the database is accessible.", poLink->driver, poLink->database );
 	return false;
     } 
@@ -337,7 +337,7 @@ void OGRGRASSLayer::ResetReading()
 /*      If we already have an FID list, we can easily resposition       */
 /*      ourselves in it.                                                */
 /************************************************************************/
-OGRErr OGRGRASSLayer::SetNextByIndex( long nIndex )
+OGRErr OGRGRASSLayer::SetNextByIndex( GIntBig nIndex )
 {
     if( m_poFilterGeom != NULL || m_poAttrQuery != NULL ) 
     {
@@ -390,7 +390,7 @@ OGRErr OGRGRASSLayer::SetAttributeFilter( const char *query )
 
     paQueryMatch = (char *) CPLMalloc ( nTotalCount );
     memset ( paQueryMatch, 0x0, nTotalCount );
-    pszQuery = strdup ( query );
+    pszQuery = CPLStrdup(query);
 
     OGRLayer::SetAttributeFilter(query); // Otherwise crash on delete
 
@@ -784,7 +784,7 @@ OGRFeature *OGRGRASSLayer::GetNextFeature()
 /************************************************************************/
 /*                             GetFeature()                             */
 /************************************************************************/
-OGRFeature *OGRGRASSLayer::GetFeature( long nFeatureId )
+OGRFeature *OGRGRASSLayer::GetFeature( GIntBig nFeatureId )
 
 {
     CPLDebug ( "GRASS", "OGRGRASSLayer::GetFeature nFeatureId = %ld", nFeatureId );
@@ -1014,7 +1014,7 @@ OGRErr OGRGRASSLayer::ICreateFeature( OGRFeature *poFeature )
 /*      Eventually we should consider implementing a more efficient     */
 /*      way of counting features matching a spatial query.              */
 /************************************************************************/
-int OGRGRASSLayer::GetFeatureCount( int bForce )
+GIntBig OGRGRASSLayer::GetFeatureCount( int bForce )
 {
     if( m_poFilterGeom != NULL || m_poAttrQuery != NULL )
         return OGRLayer::GetFeatureCount( bForce );

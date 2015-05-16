@@ -400,16 +400,27 @@ int MIFFile::Open(const char *pszFname, TABAccess eAccess,
 
         if (m_poMIDFile->Open(pszTmpFname, pszAccess) !=0)
         {
-            if (!bTestOpenNoError)
-                CPLError(CE_Failure, CPLE_NotSupported,
-                        "Unable to open %s.", pszTmpFname);
+            if (m_eAccessMode == TABWrite)
+            {
+                if (!bTestOpenNoError)
+                    CPLError(CE_Failure, CPLE_NotSupported,
+                            "Unable to open %s.", pszTmpFname);
+                else
+                    CPLErrorReset();
+
+                CPLFree(pszTmpFname);
+                Close();
+
+                return -1;
+            }
             else
-                CPLErrorReset();
-
-            CPLFree(pszTmpFname);
-            Close();
-
-            return -1;
+            {
+                CPLDebug("MITAB",
+                         "%s is not found, although %d attributes are declared",
+                         pszTmpFname, m_nAttribut);
+                delete m_poMIDFile;
+                m_poMIDFile = NULL;
+            }
         }
     }
 
@@ -836,7 +847,7 @@ int  MIFFile::AddFields(const char *pszLine)
 /*                          GetFeatureCount()                           */
 /************************************************************************/
 
-int MIFFile::GetFeatureCount (int bForce)
+GIntBig MIFFile::GetFeatureCount (int bForce)
 {
     
     if( m_poFilterGeom != NULL || m_poAttrQuery != NULL )
@@ -1245,7 +1256,7 @@ int MIFFile::Close()
  * Returns feature id that follows nPrevId, or -1 if it is the
  * last feature id.  Pass nPrevId=-1 to fetch the first valid feature id.
  **********************************************************************/
-int MIFFile::GetNextFeatureId(int nPrevId)
+GIntBig MIFFile::GetNextFeatureId(GIntBig nPrevId)
 {
     if (m_eAccessMode != TABRead)
     {
@@ -1331,7 +1342,7 @@ GBool MIFFile::NextFeature()
  * error happened.  In any case, CPLError() will have been called to
  * report the reason of the failure.
  **********************************************************************/
-TABFeature *MIFFile::GetFeatureRef(int nFeatureId)
+TABFeature *MIFFile::GetFeatureRef(GIntBig nFeatureId)
 {
     const char *pszLine;
 
@@ -1353,10 +1364,10 @@ TABFeature *MIFFile::GetFeatureRef(int nFeatureId)
         return NULL;
     }
 
-    if (GotoFeature(nFeatureId)!= 0 )
+    if ( (GIntBig)(int)nFeatureId != nFeatureId || GotoFeature((int)nFeatureId)!= 0 )
     {
         CPLError(CE_Failure, CPLE_IllegalArg,
-                 "GetFeatureRef() failed: invalid feature id %d", 
+                 "GetFeatureRef() failed: invalid feature id " CPL_FRMT_GIB, 
                  nFeatureId);
         return NULL;
     }

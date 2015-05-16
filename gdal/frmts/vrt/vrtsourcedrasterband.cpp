@@ -206,11 +206,13 @@ CPLErr VRTSourcedRasterBand::IRasterIO( GDALRWFlag eRWFlag,
     for( iSource = 0; eErr == CE_None && iSource < nSources; iSource++ )
     {
         psExtraArg->pfnProgress = GDALScaledProgress;
-            psExtraArg->pProgressData = 
+        psExtraArg->pProgressData = 
                 GDALCreateScaledProgress( 1.0 * iSource / nSources,
                                         1.0 * (iSource + 1) / nSources,
                                         pfnProgressGlobal,
                                         pProgressDataGlobal );
+        if( psExtraArg->pProgressData == NULL )
+            psExtraArg->pfnProgress = NULL;
 
         eErr = 
             papoSources[iSource]->RasterIO( nXOff, nYOff, nXSize, nYSize, 
@@ -593,7 +595,7 @@ VRTSourcedRasterBand::ComputeStatistics( int bApproxOK,
 /************************************************************************/
 
 CPLErr VRTSourcedRasterBand::GetHistogram( double dfMin, double dfMax, 
-                                     int nBuckets, int *panHistogram, 
+                                     int nBuckets, GUIntBig *panHistogram, 
                                      int bIncludeOutOfRange, int bApproxOK,
                                      GDALProgressFunc pfnProgress, 
                                      void *pProgressData )
@@ -748,7 +750,7 @@ CPLErr VRTSourcedRasterBand::XMLInit( CPLXMLNode * psTree,
 /* -------------------------------------------------------------------- */
     if( nSources == 0 )
         CPLDebug( "VRT", "No valid sources found for band in VRT file:\n%s",
-                  pszVRTPath );
+                  pszVRTPath ? pszVRTPath : "(null)" );
 
     return CE_None;
 }

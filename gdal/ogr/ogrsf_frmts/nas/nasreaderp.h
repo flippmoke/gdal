@@ -188,7 +188,9 @@ public:
     int              LoadClasses( const char *pszFile = NULL );
     int              SaveClasses( const char *pszFile = NULL );
 
-    int              PrescanForSchema(int bGetExtents = TRUE, int bAnalyzeSRSPerFeature = TRUE );
+    int              PrescanForSchema(int bGetExtents = TRUE,
+                                      int bAnalyzeSRSPerFeature = TRUE,
+                                      int bOnlyDetectSRS = FALSE);
     int              PrescanForTemplate( void );
     void             ResetReading();
 
@@ -232,7 +234,7 @@ public:
     int         SetFilteredClassName(const char* pszClassName);
     const char* GetFilteredClassName() { return m_pszFilteredClassName; }
 
-    static void* hMutex;
+    static CPLMutex* hMutex;
     
     static      OGRGeometry* ConvertGeometry(OGRGeometry*);
 };

@@ -143,7 +143,7 @@ class OGROSMLayer : public OGRLayer
     virtual int         TestCapability( const char * );
                                      
     virtual OGRFeature *GetNextFeature();
-    virtual int         GetFeatureCount( int bForce );
+    virtual GIntBig     GetFeatureCount( int bForce );
         
     virtual OGRErr      SetAttributeFilter( const char* pszAttrQuery );
 
@@ -419,8 +419,8 @@ class OGROSMDataSource : public OGRDataSource
                                  LonLat* pasLonLatPairs, int nPairs,
                                  OSMInfo* psInfo);
 
-    int                 StartTransaction();
-    int                 CommitTransaction();
+    int                 StartTransactionCacheDB();
+    int                 CommitTransactionCacheDB();
 
     int                 FindNode(GIntBig nID);
     void                ProcessWaysBatch();

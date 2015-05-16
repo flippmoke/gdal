@@ -134,15 +134,15 @@ OGRGeometry *OGRVFKLayer::CreateGeometry(IVFKFeature * poVfkFeature)
 
   \return number of features
 */
-int OGRVFKLayer::GetFeatureCount(CPL_UNUSED int bForce)
+GIntBig OGRVFKLayer::GetFeatureCount(CPL_UNUSED int bForce)
 {
     int nfeatures;
 
     /* note that 'nfeatures' is 0 when data are not read from DB */
-    nfeatures = poDataBlock->GetFeatureCount();
+    nfeatures = (int)poDataBlock->GetFeatureCount();
     if (m_poFilterGeom || m_poAttrQuery || nfeatures < 1) {
         /* force real feature count */
-        nfeatures = OGRLayer::GetFeatureCount();
+        nfeatures = (int)OGRLayer::GetFeatureCount();
     }
 
     CPLDebug("OGR-VFK", "OGRVFKLayer::GetFeatureCount(): name=%s -> n=%d",
@@ -197,7 +197,7 @@ OGRFeature *OGRVFKLayer::GetNextFeature()
 
   \return pointer to OGRFeature or NULL not found
 */
-OGRFeature *OGRVFKLayer::GetFeature(long nFID)
+OGRFeature *OGRVFKLayer::GetFeature(GIntBig nFID)
 {
     IVFKFeature *poVFKFeature;
 
@@ -207,7 +207,7 @@ OGRFeature *OGRVFKLayer::GetFeature(long nFID)
         return NULL;
 
     CPLAssert(nFID == poVFKFeature->GetFID());
-    CPLDebug("OGR-VFK", "OGRVFKLayer::GetFeature(): name=%s fid=%ld", GetName(), nFID);
+    CPLDebug("OGR-VFK", "OGRVFKLayer::GetFeature(): name=%s fid=" CPL_FRMT_GIB, GetName(), nFID);
     
     return GetFeature(poVFKFeature);
 }

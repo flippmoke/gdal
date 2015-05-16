@@ -173,22 +173,26 @@ OGRErr OGRJMLWriterLayer::ICreateFeature( OGRFeature *poFeature )
             }
             else if( eType == OFTDateTime )
             {
-                int nYear, nMonth, nDay, nHour, nMinute, nSecond, nTZFlag;
-                poFeature->GetFieldAsDateTime(i,
-                                    &nYear, &nMonth, &nDay,
-                                    &nHour, &nMinute, &nSecond,
-                                    &nTZFlag );
-                VSIFPrintfL(fp, "%04d-%02d-%02dT%02d:%02d:%02d",
-                            nYear, nMonth, nDay, nHour, nMinute, nSecond);
+                int nYear, nMonth, nDay, nHour, nMinute, nTZFlag;
+                float fSecond;
+                poFeature->GetFieldAsDateTime(i, &nYear, &nMonth, &nDay,
+                                            &nHour, &nMinute, &fSecond, &nTZFlag);
                 /* When writing time zone, OpenJUMP expects .XXX seconds */
                 /* to be written */
+                if( nTZFlag > 1 || OGR_GET_MS(fSecond) != 0 )
+                    VSIFPrintfL(fp, "%04d-%02d-%02dT%02d:%02d:%06.3f",
+                                nYear, nMonth, nDay,
+                                nHour, nMinute, fSecond);
+                else
+                    VSIFPrintfL(fp, "%04d-%02d-%02dT%02d:%02d:%02d",
+                                nYear, nMonth, nDay,
+                                nHour, nMinute, (int)fSecond);
                 if( nTZFlag > 1 )
                 {
                     int nOffset = (nTZFlag - 100) * 15;
                     int nHours = (int) (nOffset / 60);  // round towards zero
                     int nMinutes = ABS(nOffset - nHours * 60);
 
-                    VSIFPrintfL(fp, ".000");
                     if( nOffset < 0 )
                     {
                         VSIFPrintfL(fp, "-" );
@@ -294,7 +298,7 @@ OGRErr OGRJMLWriterLayer::ICreateFeature( OGRFeature *poFeature )
 /************************************************************************/
 
 OGRErr OGRJMLWriterLayer::CreateField( OGRFieldDefn *poFieldDefn,
-                                            CPL_UNUSED int bApproxOK )
+                                       int bApproxOK )
 {
     if( bFeaturesWritten )
         return OGRERR_FAILURE;
@@ -306,12 +310,32 @@ OGRErr OGRJMLWriterLayer::CreateField( OGRFieldDefn *poFieldDefn,
     OGRFieldType eType = poFieldDefn->GetType();
     if( eType == OFTInteger )
         pszType = "INTEGER";
+    else if( eType == OFTInteger64 )
+        pszType = "OBJECT";
     else if( eType == OFTReal )
         pszType = "DOUBLE";
     else if( eType == OFTDate || eType == OFTDateTime )
         pszType = "DATE";
     else
+    {
+        if( eType != OFTString )
+        {
+            if( bApproxOK )
+            {
+                CPLError(CE_Warning, CPLE_AppDefined,
+                        "Field of type %s unhandled natively. Converting to string",
+                        OGRFieldDefn::GetFieldTypeName(eType));
+            }
+            else
+            {
+                CPLError(CE_Warning, CPLE_AppDefined,
+                         "Field of type %s unhandled natively.",
+                         OGRFieldDefn::GetFieldTypeName(eType));
+                return OGRERR_FAILURE;
+            }
+        }
         pszType = "STRING";
+    }
     WriteColumnDeclaration( poFieldDefn->GetNameRef(), pszType );
 
     poFeatureDefn->AddFieldDefn( poFieldDefn );

@@ -24,7 +24,7 @@
 
 %apply (double *OUTPUT) { double *argout };
 
-%typemap(in) GIntBig bigint
+%typemap(in) GIntBig
 {
     PY_LONG_LONG val;
     if ( !PyArg_Parse($input,"L",&val) ) {
@@ -34,7 +34,7 @@
     $1 = (GIntBig)val;
 }
 
-%typemap(out) GIntBig bigint
+%typemap(out) GIntBig
 {
     char szTmp[32];
     sprintf(szTmp, CPL_FRMT_GIB, $1);
@@ -270,6 +270,74 @@ CreateTupleFromDoubleArray( double *first, unsigned int size ) {
 %typemap(freearg) (int nList, int* pList)
 {
   /* %typemap(freearg) (int nList, int* pList) */
+  if ($2) {
+    free((void*) $2);
+  }
+}
+
+/*
+ *  Typemap for counted arrays of GIntBig <- PySequence
+ */
+%typemap(in,numinputs=1) (int nList, GIntBig* pList)
+{
+  /* %typemap(in,numinputs=1) (int nList, GIntBig* pList)*/
+  /* check if is List */
+  if ( !PySequence_Check($input) ) {
+    PyErr_SetString(PyExc_TypeError, "not a sequence");
+    SWIG_fail;
+  }
+  $1 = PySequence_Size($input);
+  $2 = (GIntBig*) malloc($1*sizeof(GIntBig));
+  for( int i = 0; i<$1; i++ ) {
+    PyObject *o = PySequence_GetItem($input,i);
+    PY_LONG_LONG val;
+    if ( !PyArg_Parse(o,"L",&val) ) {
+      PyErr_SetString(PyExc_TypeError, "not an integer");
+      Py_DECREF(o);
+      SWIG_fail;
+    }
+    $2[i] = (GIntBig)val;
+    Py_DECREF(o);
+  }
+}
+
+%typemap(freearg) (int nList, GIntBig* pList)
+{
+  /* %typemap(freearg) (int nList, GIntBig* pList) */
+  if ($2) {
+    free((void*) $2);
+  }
+}
+
+/*
+ *  Typemap for counted arrays of GUIntBig <- PySequence
+ */
+%typemap(in,numinputs=1) (int nList, GUIntBig* pList)
+{
+  /* %typemap(in,numinputs=1) (int nList, GUIntBig* pList)*/
+  /* check if is List */
+  if ( !PySequence_Check($input) ) {
+    PyErr_SetString(PyExc_TypeError, "not a sequence");
+    SWIG_fail;
+  }
+  $1 = PySequence_Size($input);
+  $2 = (GUIntBig*) malloc($1*sizeof(GUIntBig));
+  for( int i = 0; i<$1; i++ ) {
+    PyObject *o = PySequence_GetItem($input,i);
+    PY_LONG_LONG val;
+    if ( !PyArg_Parse(o,"K",&val) ) {
+      PyErr_SetString(PyExc_TypeError, "not an integer");
+      Py_DECREF(o);
+      SWIG_fail;
+    }
+    $2[i] = (GUIntBig)val;
+    Py_DECREF(o);
+  }
+}
+
+%typemap(freearg) (int nList, GUIntBig* pList)
+{
+  /* %typemap(freearg) (int nList, GUIntBig* pList) */
   if ($2) {
     free((void*) $2);
   }
@@ -532,6 +600,64 @@ CreateTupleFromDoubleArray( int *first, unsigned int size ) {
 }
 
 /*
+ * Typemap argout used in Feature::GetFieldAsInteger64List()
+ */
+%typemap(in,numinputs=0) (int *nLen, const GIntBig **pList) (int nLen, GIntBig *pList)
+{
+  /* %typemap(in,numinputs=0) (int *nLen, const GIntBig **pList) (int nLen, GIntBig *pList) */
+  $1 = &nLen;
+  $2 = &pList;
+}
+
+%typemap(argout) (int *nLen, const GIntBig **pList )
+{
+  /* %typemap(argout) (int *nLen, const GIntBig **pList ) */
+  Py_DECREF($result);
+  PyObject *out = PyList_New( *$1 );
+  for( int i=0; i<*$1; i++ ) {
+    char szTmp[32];
+    sprintf(szTmp, CPL_FRMT_GIB, (*$2)[i]);
+    PyObject* val;
+%#if PY_VERSION_HEX>=0x03000000
+    val = PyLong_FromString(szTmp, NULL, 10);
+%#else
+    val = PyInt_FromString(szTmp, NULL, 10);
+%#endif
+    PyList_SetItem( out, i, val );
+  }
+  $result = out;
+}
+
+/*
+ * Typemap argout used in Feature::GetFieldAsInteger64List()
+ */
+%typemap(in,numinputs=0) (int *nLen, const GIntBig **pList) (int nLen, GIntBig *pList)
+{
+  /* %typemap(in,numinputs=0) (int *nLen, const GIntBig **pList) (int nLen, GIntBig *pList) */
+  $1 = &nLen;
+  $2 = &pList;
+}
+
+%typemap(argout) (int *nLen, const GIntBig **pList )
+{
+  /* %typemap(argout) (int *nLen, const GIntBig **pList ) */
+  Py_DECREF($result);
+  PyObject *out = PyList_New( *$1 );
+  for( int i=0; i<*$1; i++ ) {
+    char szTmp[32];
+    sprintf(szTmp, CPL_FRMT_GIB, (*$2)[i]);
+    PyObject* val;
+%#if PY_VERSION_HEX>=0x03000000
+    val = PyLong_FromString(szTmp, NULL, 10);
+%#else
+    val = PyInt_FromString(szTmp, NULL, 10);
+%#endif
+    PyList_SetItem( out, i, val );
+  }
+  $result = out;
+}
+
+/*
  * Typemap argout used in Feature::GetFieldAsDoubleList()
  */
 %typemap(in,numinputs=0) (int *nLen, const double **pList) (int nLen, double *pList)
@@ -697,14 +823,16 @@ CreateTupleFromDoubleArray( int *first, unsigned int size ) {
   if ( PySequence_Check( $input ) ) {
     int size = PySequence_Size($input);
     for (int i = 0; i < size; i++) {
-      char *pszItem = NULL;
       PyObject* pyObj = PySequence_GetItem($input,i);
-      if ( ! PyArg_Parse( pyObj, "s", &pszItem ) ) {
+      int bFreeStr;
+      char* pszStr = GDALPythonObjectToCStr(pyObj, &bFreeStr);
+      if ( pszStr == NULL ) {
           Py_DECREF(pyObj);
           PyErr_SetString(PyExc_TypeError,"sequence must contain strings");
           SWIG_fail;
       }
-      $1 = CSLAddString( $1, pszItem );
+      $1 = CSLAddString( $1, pszStr );
+      GDALPythonFreeCStr(pszStr, bFreeStr);
       Py_DECREF(pyObj);
     }
   }
@@ -715,14 +843,29 @@ CreateTupleFromDoubleArray( int *first, unsigned int size ) {
       PyObject *item_list = PyMapping_Items( $input );
       for( int i=0; i<size; i++ ) {
         PyObject *it = PySequence_GetItem( item_list, i );
-        char *nm;
-        char *val;
-        if ( ! PyArg_ParseTuple( it, "ss", &nm, &val ) ) {
+
+        PyObject *k, *v;
+        if ( ! PyArg_ParseTuple( it, "OO", &k, &v ) ) {
           Py_DECREF(it);
           PyErr_SetString(PyExc_TypeError,"dictionnaire must contain tuples of strings");
           SWIG_fail;
         }
-        $1 = CSLAddNameValue( $1, nm, val );
+
+        int bFreeK, bFreeV;
+        char* pszK = GDALPythonObjectToCStr(k, &bFreeK);
+        char* pszV = GDALPythonObjectToCStr(v, &bFreeV);
+        if( pszK == NULL || pszV == NULL )
+        {
+            GDALPythonFreeCStr(pszK, bFreeK);
+            GDALPythonFreeCStr(pszV, bFreeV);
+            Py_DECREF(it);
+            PyErr_SetString(PyExc_TypeError,"dictionnaire must contain tuples of strings");
+            SWIG_fail;
+        }
+         $1 = CSLAddNameValue( $1, pszK, pszV );
+
+        GDALPythonFreeCStr(pszK, bFreeK);
+        GDALPythonFreeCStr(pszV, bFreeV);
         Py_DECREF(it);
       }
       Py_DECREF(item_list);
@@ -1041,6 +1184,9 @@ static PyObject *XMLTreeToPyList( CPLXMLNode *psTree )
     int      nChildCount = 0, iChild;
     CPLXMLNode *psChild;
 
+    if( psTree == NULL )
+        return Py_None;
+
     for( psChild = psTree->psChild; 
          psChild != NULL; 
          psChild = psChild->psNext )
@@ -1292,26 +1438,26 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
  * a list object. 
  */
 
-%typemap(arginit) (int buckets, int* panHistogram)
+%typemap(arginit) (int buckets, GUIntBig* panHistogram)
 {
-  /* %typemap(in) int buckets, int* panHistogram -> list */
-  $2 = (int *) VSICalloc(sizeof(int),$1);
+  /* %typemap(in) int buckets, GUIntBig* panHistogram -> list */
+  $2 = (GUIntBig *) VSICalloc(sizeof(GUIntBig),$1);
 }
 
-%typemap(in, numinputs=1) (int buckets, int* panHistogram)
+%typemap(in, numinputs=1) (int buckets, GUIntBig* panHistogram)
 {
-  /* %typemap(in) int buckets, int* panHistogram -> list */
+  /* %typemap(in) int buckets, GUIntBig* panHistogram -> list */
   int requested_buckets = 0;
   SWIG_AsVal_int($input, &requested_buckets);
   if( requested_buckets != $1 )
   {
     $1 = requested_buckets;
-    if (requested_buckets <= 0 || requested_buckets > (int)(INT_MAX / sizeof(int)))
+    if (requested_buckets <= 0 || requested_buckets > (int)(INT_MAX / sizeof(GUIntBig)))
     {
         PyErr_SetString( PyExc_RuntimeError, "Bad value for buckets" );
         SWIG_fail;
     }
-    $2 = (int *) VSIRealloc($2, sizeof(int) * requested_buckets);
+    $2 = (GUIntBig *) VSIRealloc($2, sizeof(GUIntBig) * requested_buckets);
   }
   if ($2 == NULL)
   {
@@ -1320,18 +1466,18 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
   }
 }
 
-%typemap(freearg)  (int buckets, int* panHistogram)
+%typemap(freearg)  (int buckets, GUIntBig* panHistogram)
 {
-  /* %typemap(freearg) (int buckets, int* panHistogram)*/
+  /* %typemap(freearg) (int buckets, GUIntBig* panHistogram)*/
   if ( $2 ) {
     VSIFree( $2 );
   }
 }
 
-%typemap(argout) (int buckets, int* panHistogram)
+%typemap(argout) (int buckets, GUIntBig* panHistogram)
 {
-  /* %typemap(out) int buckets, int* panHistogram -> list */
-  int *integerarray = $2;
+  /* %typemap(out) int buckets, GUIntBig* panHistogram -> list */
+  GUIntBig *integerarray = $2;
   if ( integerarray == NULL ) {
     $result = Py_None;
     Py_INCREF( $result );
@@ -1339,7 +1485,13 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
   else {
     $result = PyList_New( $1 );
     for ( int i = 0; i < $1; ++i ) {
-      PyObject *o =  PyInt_FromLong( integerarray[i] );
+      char szTmp[32];
+      sprintf(szTmp, CPL_FRMT_GUIB, integerarray[i]);
+%#if PY_VERSION_HEX>=0x03000000
+      PyObject *o = PyLong_FromString(szTmp, NULL, 10);
+%#else
+      PyObject *o =  PyInt_FromString(szTmp, NULL, 10);
+%#endif
       PyList_SetItem($result, i, o );
     }
   }
@@ -1349,11 +1501,11 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
  *                       GetDefaultHistogram()
  */
 
-%typemap(arginit, noblock=1) (double *min_ret, double *max_ret, int *buckets_ret, int **ppanHistogram)
+%typemap(arginit, noblock=1) (double *min_ret, double *max_ret, int *buckets_ret, GUIntBig **ppanHistogram)
 {
    double min_val, max_val;
    int buckets_val;
-   int *panHistogram;
+   GUIntBig *panHistogram;
 
    $1 = &min_val;
    $2 = &max_val;
@@ -1361,7 +1513,7 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
    $4 = &panHistogram;
 }
 
-%typemap(argout) (double *min_ret, double *max_ret, int *buckets_ret, int** ppanHistogram)
+%typemap(argout) (double *min_ret, double *max_ret, int *buckets_ret, GUIntBig** ppanHistogram)
 {
   int i;
   PyObject *psList = NULL;
@@ -1372,7 +1524,7 @@ OBJECT_LIST_INPUT(GDALRasterBandShadow);
   {
       psList = PyList_New(buckets_val);
       for( i = 0; i < buckets_val; i++ )
-        PyList_SetItem(psList, i, Py_BuildValue("i", panHistogram[i] ));
+        PyList_SetItem(psList, i, Py_BuildValue("K", panHistogram[i] ));
 
       CPLFree( panHistogram );
 

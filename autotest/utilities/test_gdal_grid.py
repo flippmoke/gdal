@@ -31,7 +31,6 @@
 
 import sys
 import os
-import shutil
 import struct
 
 sys.path.append( '../pymod' )
@@ -272,7 +271,13 @@ def test_gdal_grid_3():
         pass
 
     # Create a GDAL dataset from the values of "grid.csv".
-    gdaltest.runexternal(gdal_grid + ' --config GDAL_USE_AVX NO --config GDAL_USE_SSE NO -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    print('Step 1: Disabling AVX/SSE optimized versions...')
+    (out, err) = gdaltest.runexternal_out_and_err(gdal_grid + ' --debug on --config GDAL_USE_AVX NO --config GDAL_USE_SSE NO -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    pos = err.find(' threads')
+    if pos >= 0:
+        pos_blank = err[0:pos-1].rfind(' ')
+        if pos_blank >= 0:
+            print('Step 1: %s threads used' % err[pos_blank+1:pos])
 
     # We should get the same values as in "ref_data/gdal_invdist.tif"
     ds = gdal.Open(outfiles[-1])
@@ -295,7 +300,12 @@ def test_gdal_grid_3():
         pass
 
     # Create a GDAL dataset from the values of "grid.csv".
-    gdaltest.runexternal(gdal_grid + ' --config GDAL_USE_AVX NO -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    print('Step 2: Trying SSE optimized version...')
+    (out, err) = gdaltest.runexternal_out_and_err(gdal_grid + ' --debug on --config GDAL_USE_AVX NO -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    if err.find('SSE') >= 0:
+        print('...SSE optimized version used')
+    else:
+        print('...SSE optimized version NOT used')
 
     # We should get the same values as in "ref_data/gdal_invdist.tif"
     ds = gdal.Open(outfiles[-1])
@@ -318,7 +328,12 @@ def test_gdal_grid_3():
         pass
 
     # Create a GDAL dataset from the values of "grid.csv".
-    gdaltest.runexternal(gdal_grid + ' -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    print('Step 3: Trying AVX optimized version...')
+    (out, err) = gdaltest.runexternal_out_and_err(gdal_grid + ' --debug on -txe 440720.0 441920.0 -tye 3751320.0 3750120.0 -outsize 20 20 -ot Float64 -l grid -a invdist:power=2.0:smoothing=0.0:radius1=0.0:radius2=0.0:angle=0.0:max_points=0:min_points=0:nodata=0.0 data/grid.vrt ' + outfiles[-1])
+    if err.find('AVX') >= 0:
+        print('...AVX optimized version used')
+    else:
+        print('...AVX optimized version NOT used')
 
     # We should get the same values as in "ref_data/gdal_invdist.tif"
     ds = gdal.Open(outfiles[-1])
@@ -522,7 +537,7 @@ def test_gdal_grid_5():
     ds_ref = gdal.Open('ref_data/grid_minimum.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -543,7 +558,7 @@ def test_gdal_grid_5():
     ds_ref = gdal.Open('ref_data/grid_minimum_400_100_120.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -573,7 +588,7 @@ def test_gdal_grid_6():
     ds_ref = gdal.Open('ref_data/grid_maximum.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -594,7 +609,7 @@ def test_gdal_grid_6():
     ds_ref = gdal.Open('ref_data/grid_maximum_100_100.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -624,7 +639,7 @@ def test_gdal_grid_7():
     ds_ref = gdal.Open('ref_data/grid_range.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -646,7 +661,7 @@ def test_gdal_grid_7():
     ds_ref = gdal.Open('ref_data/grid_range_90_90_8p.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -675,7 +690,7 @@ def test_gdal_grid_8():
     ds_ref = gdal.Open('ref_data/grid_count_70_70.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None
@@ -695,7 +710,7 @@ def test_gdal_grid_8():
     ds_ref = gdal.Open('ref_data/grid_count_300_300.tif')
     if ds.GetRasterBand(1).Checksum() != ds_ref.GetRasterBand(1).Checksum():
         print('bad checksum : got %d, expected %d' % \
-              (ds.GetRasterBand(1).Checksum(), checksum_ref))
+              (ds.GetRasterBand(1).Checksum(), ds_ref.GetRasterBand(1).checksum_ref))
         return 'fail'
     ds_ref = None
     ds = None

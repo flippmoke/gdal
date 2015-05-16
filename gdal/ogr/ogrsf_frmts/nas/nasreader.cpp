@@ -49,7 +49,7 @@
 #include "nasreaderp.h"
 #include "cpl_conv.h"
 
-void *NASReader::hMutex = NULL;
+CPLMutex *NASReader::hMutex = NULL;
 
 /************************************************************************/
 /*                          CreateGMLReader()                           */
@@ -854,7 +854,9 @@ int NASReader::SaveClasses( const char *pszFile )
 /*      looking for schema information.                                 */
 /************************************************************************/
 
-int NASReader::PrescanForSchema( int bGetExtents, CPL_UNUSED int bAnalyzeSRSPerFeature )
+int NASReader::PrescanForSchema( int bGetExtents,
+                                 CPL_UNUSED int bAnalyzeSRSPerFeature,
+                                 CPL_UNUSED int bOnlyDetectSRS )
 {
     GMLFeature  *poFeature;
 
@@ -896,7 +898,7 @@ int NASReader::PrescanForSchema( int bGetExtents, CPL_UNUSED int bAnalyzeSRSPerF
                 OGREnvelope sEnvelope;
 
                 if( poClass->GetGeometryPropertyCount() == 0 )
-                    poClass->AddGeometryProperty( new GMLGeometryPropertyDefn( "", "", wkbUnknown ) );
+                    poClass->AddGeometryProperty( new GMLGeometryPropertyDefn( "", "", wkbUnknown, -1, TRUE ) );
 
                 OGRwkbGeometryType eGType = (OGRwkbGeometryType)
                     poClass->GetGeometryProperty(0)->GetType();

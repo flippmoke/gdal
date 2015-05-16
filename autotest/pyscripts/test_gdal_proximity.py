@@ -37,19 +37,12 @@ sys.path.append( '../pymod' )
 import gdaltest
 import test_py_scripts
 
-from osgeo import gdal, gdalconst
+from osgeo import gdal
 
 ###############################################################################
 # Test a fairly default case.
 
 def test_gdal_proximity_1():
-
-    try:
-        x = gdal.ComputeProximity
-        gdaltest.have_ng = 1
-    except:
-        gdaltest.have_ng = 0
-        return 'skip'
 
     script_path = test_py_scripts.get_py_script('gdal_proximity')
     if script_path is None:
@@ -82,13 +75,6 @@ def test_gdal_proximity_1():
 
 def test_gdal_proximity_2():
 
-    try:
-        x = gdal.ComputeProximity
-        gdaltest.have_ng = 1
-    except:
-        gdaltest.have_ng = 0
-        return 'skip'
-
     script_path = test_py_scripts.get_py_script('gdal_proximity')
     if script_path is None:
         return 'skip'
@@ -112,12 +98,40 @@ def test_gdal_proximity_2():
         return 'success' 
 
 ###############################################################################
+# Try input nodata option
+
+def test_gdal_proximity_3():
+
+    script_path = test_py_scripts.get_py_script('gdal_proximity')
+    if script_path is None:
+        return 'skip'
+    
+    test_py_scripts.run_py_script(script_path, 'gdal_proximity', '-q -values 65,64 -maxdist 12 -nodata 0 -use_input_nodata yes ../alg/data/pat.tif tmp/proximity_3.tif' )
+
+    dst_ds = gdal.Open('tmp/proximity_3.tif')
+    dst_band = dst_ds.GetRasterBand(1)
+
+    cs_expected = 1465
+    cs = dst_band.Checksum()
+    
+    dst_band = None
+    dst_ds = None
+
+    if cs != cs_expected:
+        print('Got: ', cs)
+        gdaltest.post_reason( 'got wrong checksum' )
+        return 'fail'
+    else:
+        return 'success' 
+
+###############################################################################
 # Cleanup
 
 def test_gdal_proximity_cleanup():
 
     lst = [ 'tmp/proximity_1.tif',
-            'tmp/proximity_2.tif' ]
+            'tmp/proximity_2.tif',
+            'tmp/proximity_3.tif' ]
     for filename in lst:
         try:
             os.remove(filename)
@@ -129,6 +143,7 @@ def test_gdal_proximity_cleanup():
 gdaltest_list = [
     test_gdal_proximity_1,
     test_gdal_proximity_2,
+    test_gdal_proximity_3,
     test_gdal_proximity_cleanup,
     ]
 

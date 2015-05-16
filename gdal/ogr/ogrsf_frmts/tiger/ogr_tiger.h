@@ -517,11 +517,11 @@ class OGRTigerLayer : public OGRLayer
 
     void                ResetReading();
     OGRFeature *        GetNextFeature();
-    OGRFeature         *GetFeature( long nFeatureId );
+    OGRFeature         *GetFeature( GIntBig nFeatureId );
 
     OGRFeatureDefn *    GetLayerDefn();
 
-    int                 GetFeatureCount( int );
+    GIntBig             GetFeatureCount( int );
 
     int                 TestCapability( const char * );
 

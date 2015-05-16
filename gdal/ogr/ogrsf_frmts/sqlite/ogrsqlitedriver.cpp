@@ -104,7 +104,7 @@ static GDALDataset *OGRSQLiteDriverOpen( GDALOpenInfo* poOpenInfo )
 
         char** papszOptions = CSLAddString(NULL, "SPATIALITE=YES");
         int nRet = poDS->Create( ":memory:", papszOptions );
-        poDS->SetName(poOpenInfo->pszFilename);
+        poDS->SetDescription(poOpenInfo->pszFilename);
         CSLDestroy(papszOptions);
         if (!nRet)
         {
@@ -134,6 +134,7 @@ static GDALDataset *OGRSQLiteDriverOpen( GDALOpenInfo* poOpenInfo )
         poDS->ExecuteSQL(pszSQL, NULL, NULL);
         CPLFree(pszSQL);
         CPLFree(pszSQLiteFilename);
+        poDS->SetUpdate(FALSE);
         return poDS;
     }
 
@@ -145,7 +146,8 @@ static GDALDataset *OGRSQLiteDriverOpen( GDALOpenInfo* poOpenInfo )
 
     poDS = new OGRSQLiteDataSource();
 
-    if( !poDS->Open( poOpenInfo->pszFilename, poOpenInfo->eAccess == GA_Update ) )
+    if( !poDS->Open( poOpenInfo->pszFilename, poOpenInfo->eAccess == GA_Update,
+                     poOpenInfo->papszOpenOptions ) )
     {
         delete poDS;
         return NULL;
@@ -230,6 +232,12 @@ void RegisterOGRSQLite()
                                    "drv_sqlite.html" );
         poDriver->SetMetadataItem( GDAL_DMD_EXTENSIONS, "sqlite db" );
 
+        poDriver->SetMetadataItem( GDAL_DMD_OPENOPTIONLIST,
+"<OpenOptionList>"
+"  <Option name='LIST_ALL_TABLES' type='boolean' description='Whether all tables, including non-spatial ones, should be listed' default='NO'/>"
+"  <Option name='LIST_VIRTUAL_OGR' type='boolean' description='Whether VirtualOGR virtual tables should be listed. Should only be enabled on trusted datasources to avoid potential safety issues' default='NO'/>"
+"</OpenOptionList>");
+
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST,
 "<CreationOptionList>"
 #ifdef HAVE_SPATIALITE
@@ -248,6 +256,7 @@ void RegisterOGRSQLite()
 "    <Value>SPATIALITE</Value>"
 #endif
 "  </Option>"
+"  <Option name='GEOMETRY_NAME' type='string' description='Name of geometry column. Defaults to WKT_GEOMETRY for FORMAT=WKT or GEOMETRY otherwise'/>"
 "  <Option name='LAUNDER' type='boolean' description='Whether layer and field names will be laundered' default='YES'/>"
 #ifdef HAVE_SPATIALITE
 "  <Option name='SPATIAL_INDEX' type='boolean' description='Whether to create a spatial index for Spatialite databases' default='YES'/>"
@@ -256,7 +265,13 @@ void RegisterOGRSQLite()
 "  <Option name='SRID' type='int' description='Forced SRID of the layer'/>"
 "  <Option name='COMPRESS_COLUMNS' type='string' description='=column_name1[,column_name2, ...].  list of (String) columns that must be compressed with ZLib DEFLATE algorithm'/>"
 "  <Option name='OVERWRITE' type='boolean' description='Whether to overwrite an existing table with the layer name to be created' default='NO'/>"
+"  <Option name='FID' type='string' description='Name of the FID column to create' default='OGC_FID'/>"
 "</LayerCreationOptionList>");
+        
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONFIELDDATATYPES, "Integer Integer64 Real String Date DateTime Time Binary" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_DEFAULT_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_GEOMFIELDS, "YES" );
 
         poDriver->SetMetadataItem( GDAL_DCAP_VIRTUALIO, "YES" );
 

@@ -34,6 +34,7 @@
 #include "gmlreader.h"
 #include "ogr_api.h"
 #include "cpl_vsi.h"
+#include "cpl_multiproc.h"
 
 #include <string>
 #include <vector>
@@ -462,6 +463,8 @@ private:
     int           m_bSetWidthFlag;
     
     int           m_bReportAllAttributes;
+    
+    int           m_bIsWFSJointLayer;
 
     int           ParseXMLHugeFile( const char *pszOutputFilename, 
                                     const int bSqliteIsTempFile,
@@ -502,7 +505,9 @@ public:
                                        int pbSqliteIsTempFile,
                                        int iSqliteCacheMB );
 
-    int              PrescanForSchema(int bGetExtents = TRUE, int bAnalyzeSRSPerFeature = TRUE );
+    int              PrescanForSchema(int bGetExtents = TRUE,
+                                      int bAnalyzeSRSPerFeature = TRUE,
+                                      int bOnlyDetectSRS = FALSE );
     int              PrescanForTemplate( void );
     int              ReArrangeTemplateClasses( GFSTemplateList *pCC );
     void             ResetReading();
@@ -546,8 +551,11 @@ public:
     int         IsSequentialLayers() const { return m_bSequentialLayers == TRUE; }
     
     int         ReportAllAttributes() const { return m_bReportAllAttributes; }
+    
+    void             SetIsWFSJointLayer( int bFlag ) { m_bIsWFSJointLayer = bFlag; }
+    int              IsWFSJointLayer() const { return m_bIsWFSJointLayer; }
 
-    static void* hMutex;
+    static CPLMutex* hMutex;
 };
 
 #endif /* _CPL_GMLREADERP_H_INCLUDED */

@@ -30,7 +30,6 @@
 
 import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
@@ -318,7 +317,456 @@ def ogr_pgdump_4():
         return 'fail'
         
     return 'success'
+
+###############################################################################
+# Test non nullable field support
+
+def ogr_pgdump_5():
     
+    ds = ogr.GetDriverByName('PGDump').CreateDataSource('/vsimem/ogr_pgdump_5.sql', options = [ 'LINEFORMAT=LF' ] )
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone)
+    field_defn = ogr.FieldDefn('field_not_nullable', ogr.OFTString)
+    field_defn.SetNullable(0)
+    lyr.CreateField(field_defn)
+    field_defn = ogr.FieldDefn('field_nullable', ogr.OFTString)
+    lyr.CreateField(field_defn)
+    field_defn = ogr.GeomFieldDefn('geomfield_not_nullable', ogr.wkbPoint)
+    field_defn.SetNullable(0)
+    lyr.CreateGeomField(field_defn)
+    field_defn = ogr.GeomFieldDefn('geomfield_nullable', ogr.wkbPoint)
+    lyr.CreateGeomField(field_defn)
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    f.SetGeomFieldDirectly('geomfield_not_nullable', ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    lyr.CreateFeature(f)
+    f = None
+    
+    # Error case: missing geometry
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    
+    # Error case: missing non-nullable field
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+
+    ds = None
+    
+    f = gdal.VSIFOpenL('/vsimem/ogr_pgdump_5.sql', 'rb')
+    sql = gdal.VSIFReadL(1, 1000, f).decode('ascii')
+    gdal.VSIFCloseL(f)
+
+    gdal.Unlink('/vsimem/ogr_pgdump_5.sql')
+
+    if sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_not_nullable" VARCHAR NOT NULL;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_nullable" VARCHAR;""") == -1 or \
+       sql.find("""ALTER TABLE "test" ALTER COLUMN "geomfield_not_nullable" SET NOT NULL;""") == -1:
+        print(sql)
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test default values
+
+def ogr_pgdump_6():
+    
+    ds = ogr.GetDriverByName('PGDump').CreateDataSource('/vsimem/ogr_pgdump_6.sql', options = [ 'LINEFORMAT=LF' ] )
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone)
+    
+    field_defn = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_defn.SetDefault("'a''b'")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_int', ogr.OFTInteger )
+    field_defn.SetDefault('123')
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_real', ogr.OFTReal )
+    field_defn.SetDefault('1.23')
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_nodefault', ogr.OFTInteger )
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_datetime', ogr.OFTDateTime )
+    field_defn.SetDefault("CURRENT_TIMESTAMP")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_datetime2', ogr.OFTDateTime )
+    field_defn.SetDefault("'2015/06/30 12:34:56'")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_date', ogr.OFTDate )
+    field_defn.SetDefault("CURRENT_DATE")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_time', ogr.OFTTime )
+    field_defn.SetDefault("CURRENT_TIME")
+    lyr.CreateField(field_defn)
+
+    gdal.SetConfigOption( 'PG_USE_COPY', 'YES' )
+
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_string', 'a')
+    f.SetField('field_int', 456)
+    f.SetField('field_real', 4.56)
+    f.SetField('field_datetime', '2015/06/30 12:34:56')
+    f.SetField('field_datetime2', '2015/06/30 12:34:56')
+    f.SetField('field_date', '2015/06/30')
+    f.SetField('field_time', '12:34:56')
+    lyr.CreateFeature(f)
+    f = None
+    
+    # Transition from COPY to INSERT
+    f = ogr.Feature(lyr.GetLayerDefn())
+    lyr.CreateFeature(f)
+    f = None
+
+    # Transition from INSERT to COPY
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_string', 'b')
+    f.SetField('field_int', 456)
+    f.SetField('field_real', 4.56)
+    f.SetField('field_datetime', '2015/06/30 12:34:56')
+    f.SetField('field_datetime2', '2015/06/30 12:34:56')
+    f.SetField('field_date', '2015/06/30')
+    f.SetField('field_time', '12:34:56')
+    lyr.CreateFeature(f)
+    f = None
+
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+
+    ds = None
+    
+    f = gdal.VSIFOpenL('/vsimem/ogr_pgdump_6.sql', 'rb')
+    sql = gdal.VSIFReadL(1, 10000, f).decode('ascii')
+    gdal.VSIFCloseL(f)
+
+    gdal.Unlink('/vsimem/ogr_pgdump_6.sql')
+
+    if sql.find("""a\t456\t4.56\t\\N\t2015/06/30 12:34:56\t2015/06/30 12:34:56\t2015/06/30\t12:34:56""") < 0 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_string" VARCHAR DEFAULT 'a''b';""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_int" INTEGER DEFAULT 123;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_real" FLOAT8 DEFAULT 1.23;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_datetime" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_datetime2" timestamp with time zone DEFAULT '2015/06/30 12:34:56+00'::timestamp with time zone;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_date" date DEFAULT CURRENT_DATE;""") == -1 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "field_time" time DEFAULT CURRENT_TIME;""") == -1 or \
+       sql.find("""b\t456\t4.56\t\\N\t2015/06/30 12:34:56\t2015/06/30 12:34:56\t2015/06/30\t12:34:56""") < 0:
+        print(sql)
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test creating a field with the fid name (PG_USE_COPY=NO)
+
+def ogr_pgdump_7():
+
+    ds = ogr.GetDriverByName('PGDump').CreateDataSource('/vsimem/ogr_pgdump_7.sql', options = [ 'LINEFORMAT=LF' ] )
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone, options = ['FID=myfid'])
+
+    lyr.CreateField(ogr.FieldDefn('str', ogr.OFTString))
+    gdal.PushErrorHandler()
+    ret = lyr.CreateField(ogr.FieldDefn('myfid', ogr.OFTString))
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    ret = lyr.CreateField(ogr.FieldDefn('myfid', ogr.OFTInteger))
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    lyr.CreateField(ogr.FieldDefn('str2', ogr.OFTString))
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'first string')
+    feat.SetField('myfid', 10)
+    feat.SetField('str2', 'second string')
+    ret = lyr.CreateFeature(feat)
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() != 10:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str2', 'second string')
+    ret = lyr.CreateFeature(feat)
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() < 0:
+        gdaltest.post_reason('fail')
+        feat.DumpReadable()
+        return 'fail'
+    if feat.GetField('myfid') != feat.GetFID():
+        gdaltest.post_reason('fail')
+        feat.DumpReadable()
+        return 'fail'
+
+    #feat.SetField('str', 'foo')
+    #ret = lyr.SetFeature(feat)
+    #if ret != 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetFID(1)
+    feat.SetField('myfid', 10)
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(feat)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    #gdal.PushErrorHandler()
+    #ret = lyr.SetFeature(feat)
+    #gdal.PopErrorHandler()
+    #if ret == 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    #feat.UnsetField('myfid')
+    #gdal.PushErrorHandler()
+    #ret = lyr.SetFeature(feat)
+    #gdal.PopErrorHandler()
+    #if ret == 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'first string')
+    feat.SetField('myfid', 12)
+    feat.SetField('str2', 'second string')
+    ret = lyr.CreateFeature(feat)
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() != 12:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    ds = None
+    
+    f = gdal.VSIFOpenL('/vsimem/ogr_pgdump_7.sql', 'rb')
+    sql = gdal.VSIFReadL(1, 10000, f).decode('ascii')
+    gdal.VSIFCloseL(f)
+
+    gdal.Unlink('/vsimem/ogr_pgdump_7.sql')
+
+    if sql.find("""CREATE TABLE "public"."test" (    "myfid" SERIAL,    CONSTRAINT "test_pk" PRIMARY KEY ("myfid") )""") < 0 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "myfid" """) >= 0 or \
+       sql.find("""INSERT INTO "public"."test" ("myfid" , "str", "str2") VALUES (10, 'first string', 'second string');""") == -1 or \
+       sql.find("""INSERT INTO "public"."test" ("str2") VALUES ('second string');""") == -1 or \
+       sql.find("""INSERT INTO "public"."test" ("myfid" , "str", "str2") VALUES (12, 'first string', 'second string');""") == -1:
+        print(sql)
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test creating a field with the fid name (PG_USE_COPY=NO)
+
+def ogr_pgdump_8():
+
+    ds = ogr.GetDriverByName('PGDump').CreateDataSource('/vsimem/ogr_pgdump_8.sql', options = [ 'LINEFORMAT=LF' ] )
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone, options = ['FID=myfid'])
+
+    lyr.CreateField(ogr.FieldDefn('str', ogr.OFTString))
+    gdal.PushErrorHandler()
+    ret = lyr.CreateField(ogr.FieldDefn('myfid', ogr.OFTString))
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    ret = lyr.CreateField(ogr.FieldDefn('myfid', ogr.OFTInteger))
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    lyr.CreateField(ogr.FieldDefn('str2', ogr.OFTString))
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'first string')
+    feat.SetField('myfid', 10)
+    feat.SetField('str2', 'second string')
+    gdal.SetConfigOption( 'PG_USE_COPY', 'YES' )
+    ret = lyr.CreateFeature(feat)
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() != 10:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str2', 'second string')
+    gdal.SetConfigOption( 'PG_USE_COPY', 'YES' )
+    ret = lyr.CreateFeature(feat)
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() < 0:
+        gdaltest.post_reason('fail')
+        feat.DumpReadable()
+        return 'fail'
+    if feat.GetField('myfid') != feat.GetFID():
+        gdaltest.post_reason('fail')
+        feat.DumpReadable()
+        return 'fail'
+
+    #feat.SetField('str', 'foo')
+    #ret = lyr.SetFeature(feat)
+    #if ret != 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetFID(1)
+    feat.SetField('myfid', 10)
+    gdal.PushErrorHandler()
+    gdal.SetConfigOption( 'PG_USE_COPY', 'YES' )
+    ret = lyr.CreateFeature(feat)
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    #gdal.PushErrorHandler()
+    #ret = lyr.SetFeature(feat)
+    #gdal.PopErrorHandler()
+    #if ret == 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    #feat.UnsetField('myfid')
+    #gdal.PushErrorHandler()
+    #ret = lyr.SetFeature(feat)
+    #gdal.PopErrorHandler()
+    #if ret == 0:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'first string')
+    feat.SetField('myfid', 12)
+    feat.SetField('str2', 'second string')
+    gdal.SetConfigOption( 'PG_USE_COPY', 'YES' )
+    ret = lyr.CreateFeature(feat)
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if feat.GetFID() != 12:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    ds = None
+    
+    f = gdal.VSIFOpenL('/vsimem/ogr_pgdump_8.sql', 'rb')
+    sql = gdal.VSIFReadL(1, 10000, f).decode('ascii')
+    gdal.VSIFCloseL(f)
+
+    gdal.Unlink('/vsimem/ogr_pgdump_8.sql')
+
+    if sql.find("""CREATE TABLE "public"."test" (    "myfid" SERIAL,    CONSTRAINT "test_pk" PRIMARY KEY ("myfid") )""") < 0 or \
+       sql.find("""ALTER TABLE "public"."test" ADD COLUMN "myfid" """) >= 0 or \
+       sql.find("""10\tfirst string\tsecond string""") == -1 or \
+       sql.find("""INSERT INTO "public"."test" ("str2") VALUES ('second string');""") == -1 or \
+       sql.find("""12\tfirst string\tsecond string""") == -1:
+        print(sql)
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test creating a field with the fid name (PG_USE_COPY=NO)
+
+def ogr_pgdump_9(pg_use_copy = 'YES'):
+
+    gdal.SetConfigOption( 'PG_USE_COPY', pg_use_copy )
+
+    ds = ogr.GetDriverByName('PGDump').CreateDataSource('/vsimem/ogr_pgdump_9.sql', options = [ 'LINEFORMAT=LF' ] )
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone)
+
+    fld = ogr.FieldDefn('str', ogr.OFTString)
+    fld.SetWidth(5)
+    lyr.CreateField(fld)
+    fld = ogr.FieldDefn('str2', ogr.OFTString)
+    lyr.CreateField(fld)
+
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', '01234')
+    lyr.CreateFeature(feat)
+    
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'ABCDEF')
+    lyr.CreateFeature(feat)
+    
+    if sys.version_info >= (3,0,0):
+        val4 = '\u00e9\u00e9\u00e9\u00e9'
+        val5 = val4 + '\u00e9'
+        val6 = val5 + '\u00e9'
+    else:
+        exec("val4 = u'\\u00e9\\u00e9\\u00e9\\u00e9'")
+        exec("val5 = val4 + u'\\u00e9'")
+        exec("val6 = val5 + u'\\u00e9'")
+    
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', val6)
+    lyr.CreateFeature(feat)
+    
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('str', 'a' + val5)
+    lyr.CreateFeature(feat)
+    
+    gdal.SetConfigOption( 'PG_USE_COPY', None )
+    
+    ds = None
+    
+    f = gdal.VSIFOpenL('/vsimem/ogr_pgdump_9.sql', 'rb')
+    sql = gdal.VSIFReadL(1, 10000, f).decode('utf8')
+    gdal.VSIFCloseL(f)
+
+    gdal.Unlink('/vsimem/ogr_pgdump_9.sql')
+
+    if pg_use_copy == 'YES':
+        eofield = '\t'
+    else:
+        eofield = "'"
+    if sql.find("""01234%s""" % eofield) < 0 or \
+       sql.find("""ABCDE%s""" % eofield) < 0 or \
+       sql.find("""%s%s""" % (val5, eofield)) < 0 or \
+       sql.find("""%s%s""" % ('a'+val4, eofield)) < 0:
+        print(sql)
+        return 'fail'
+
+    return 'success'
+
+def ogr_pgdump_10():
+    return ogr_pgdump_9('NO')
+
 ###############################################################################
 # Cleanup
 
@@ -339,6 +787,12 @@ gdaltest_list = [
     ogr_pgdump_2,
     ogr_pgdump_3,
     ogr_pgdump_4,
+    ogr_pgdump_5,
+    ogr_pgdump_6,
+    ogr_pgdump_7,
+    ogr_pgdump_8,
+    ogr_pgdump_9,
+    ogr_pgdump_10,
     ogr_pgdump_cleanup ]
 
 

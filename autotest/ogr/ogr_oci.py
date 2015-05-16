@@ -28,7 +28,6 @@
 
 import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
@@ -46,7 +45,7 @@ def ogr_oci_1():
     gdaltest.oci_ds = None
     
     try:
-        dods_dr = ogr.GetDriverByName( 'OCI' )
+        ogr.GetDriverByName( 'OCI' )
     except:
         return 'skip'
     
@@ -105,7 +104,20 @@ def ogr_oci_2():
         feat = shp_lyr.GetNextFeature()
 
     dst_feat.Destroy()
-        
+
+    # Test updating non-existing feature
+    shp_lyr.ResetReading()
+    feat = shp_lyr.GetNextFeature()
+    feat.SetFID(-10)
+    if gdaltest.oci_lyr.SetFeature( feat ) != ogr.OGRERR_NON_EXISTING_FEATURE:
+        gdaltest.post_reason( 'Expected failure of SetFeature().' )
+        return 'fail'
+
+    # Test deleting non-existing feature
+    if gdaltest.oci_lyr.DeleteFeature( -10 ) != ogr.OGRERR_NON_EXISTING_FEATURE:
+        gdaltest.post_reason( 'Expected failure of DeleteFeature().' )
+        return 'fail'
+
     return 'success'
 
 ###############################################################################
@@ -178,7 +190,6 @@ def ogr_oci_4():
     if gdaltest.oci_ds is None:
         return 'skip'
 
-    dst_feat = ogr.Feature( feature_def = gdaltest.oci_lyr.GetLayerDefn() )
     wkt_list = [ '10', '2', '1', '3d_1', '4', '5', '6' ]
 
     for item in wkt_list:
@@ -189,6 +200,7 @@ def ogr_oci_4():
         ######################################################################
         # Write geometry as a new Oracle feature.
     
+        dst_feat = ogr.Feature( feature_def = gdaltest.oci_lyr.GetLayerDefn() )
         dst_feat.SetGeometryDirectly( geom )
         dst_feat.SetField( 'PRFEDEA', item )
         gdaltest.oci_lyr.CreateFeature( dst_feat )
@@ -198,8 +210,6 @@ def ogr_oci_4():
 
         gdaltest.oci_lyr.SetAttributeFilter( "PRFEDEA = '%s'" % item )
         feat_read = gdaltest.oci_lyr.GetNextFeature()
-        geom_read = feat_read.GetGeometryRef()
-
         if ogrtest.check_feature_geometry( feat_read, geom ) != 0:
             return 'fail'
 
@@ -220,6 +230,9 @@ def ogr_oci_5():
     expect = [ None, 179, 173, 172, 171, 170, 169, 168, 166, 165, 158 ]
     
     sql_lyr = gdaltest.oci_ds.ExecuteSQL( 'select distinct eas_id from tpoly order by eas_id desc' )
+    if sql_lyr.GetLayerDefn().GetGeomFieldCount() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
 
     tr = ogrtest.check_features_against_list( sql_lyr, 'eas_id', expect )
 
@@ -239,6 +252,9 @@ def ogr_oci_6():
         return 'skip'
 
     sql_lyr = gdaltest.oci_ds.ExecuteSQL( "select * from tpoly where prfedea = '2'" )
+    if sql_lyr.GetLayerDefn().GetGeomFieldCount() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
 
     tr = ogrtest.check_features_against_list( sql_lyr, 'prfedea', [ '2' ] )
     if tr:
@@ -803,6 +819,245 @@ def ogr_oci_18():
     return 'success'
 
 ###############################################################################
+# Test date / datetime
+
+def ogr_oci_19():
+
+    if gdaltest.oci_ds is None:
+        return 'skip'
+
+    lyr = gdaltest.oci_ds.CreateLayer('testdate', geom_type = ogr.wkbNone )
+    lyr.CreateField(ogr.FieldDefn('MYDATE', ogr.OFTDate))
+    lyr.CreateField(ogr.FieldDefn('MYDATETIME', ogr.OFTDateTime))
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('MYDATE', '2015/02/03')
+    feat.SetField('MYDATETIME', '2015/02/03 11:33:44')
+    lyr.CreateFeature(feat)
+    lyr.SyncToDisk()
+    
+    sql_lyr = gdaltest.oci_ds.ExecuteSQL('SELECT MYDATE, MYDATETIME FROM testdate')
+    if sql_lyr.GetLayerDefn().GetFieldDefn(0).GetType() != ogr.OFTDate:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if sql_lyr.GetLayerDefn().GetFieldDefn(1).GetType() != ogr.OFTDateTime:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = sql_lyr.GetNextFeature()
+    if f.GetField(0) != '2015/02/03' or f.GetField(1) != '2015/02/03 11:33:44':
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'fail'
+    gdaltest.oci_ds.ReleaseResultSet(sql_lyr)
+    
+    return 'success'
+
+###############################################################################
+# Test not nullable fields
+
+def ogr_oci_20():
+
+    if gdaltest.oci_ds is None:
+        return 'skip'
+    lyr = gdaltest.oci_ds.CreateLayer('ogr_oci_20', geom_type = ogr.wkbPoint, options = ['GEOMETRY_NULLABLE=NO', 'DIM=2'])
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    field_defn = ogr.FieldDefn('field_not_nullable', ogr.OFTString)
+    field_defn.SetNullable(0)
+    lyr.CreateField(field_defn)
+    field_defn = ogr.FieldDefn('field_nullable', ogr.OFTString)
+    lyr.CreateField(field_defn)
+
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    ret = lyr.CreateFeature(f)
+    f = None
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Error case: missing geometry
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    
+    # Error case: missing non-nullable field
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    lyr.SyncToDisk()
+
+    # Test with nullable geometry
+    lyr = gdaltest.oci_ds.CreateLayer('ogr_oci_20bis', geom_type = ogr.wkbPoint, options = ['DIM=2'])
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    ret = lyr.CreateFeature(f)
+    f = None
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = ogr.Feature(lyr.GetLayerDefn())
+    ret = lyr.CreateFeature(f)
+    f = None
+    if ret != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    lyr.SyncToDisk()
+
+    oci_ds2 = ogr.Open( os.environ['OCI_DSNAME'] )
+
+    lyr = oci_ds2.GetLayerByName('ogr_oci_20')
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_not_nullable')).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_nullable')).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    lyr = oci_ds2.GetLayerByName('ogr_oci_20bis')
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    feat = lyr.GetNextFeature()
+    if feat.GetGeometryRef() is None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    feat = lyr.GetNextFeature()
+    if feat.GetGeometryRef() is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test default values
+
+def ogr_oci_21():
+
+    if gdaltest.oci_ds is None:
+        return 'skip'
+
+    lyr = gdaltest.oci_ds.CreateLayer('ogr_oci_21', geom_type = ogr.wkbPoint, options = ['DIM=2'])
+
+    field_defn = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_defn.SetDefault("'a''b'")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_int', ogr.OFTInteger )
+    field_defn.SetDefault('123')
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_real', ogr.OFTReal )
+    field_defn.SetDefault('1.23')
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_nodefault', ogr.OFTInteger )
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_datetime', ogr.OFTDateTime )
+    field_defn.SetDefault("CURRENT_TIMESTAMP")
+    lyr.CreateField(field_defn)
+
+    field_defn = ogr.FieldDefn( 'field_datetime2', ogr.OFTDateTime )
+    field_defn.SetDefault("'2015/06/30 12:34:56'")
+    lyr.CreateField(field_defn)
+
+    #field_defn = ogr.FieldDefn( 'field_date', ogr.OFTDate )
+    #field_defn.SetDefault("CURRENT_DATE")
+    #lyr.CreateField(field_defn)
+
+    #field_defn = ogr.FieldDefn( 'field_time', ogr.OFTTime )
+    #field_defn.SetDefault("CURRENT_TIME")
+    #lyr.CreateField(field_defn)
+
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_string', 'c')
+    f.SetField('field_int', 456)
+    f.SetField('field_real', 4.56)
+    f.SetField('field_datetime', '2015/06/30 12:34:56')
+    f.SetField('field_datetime2', '2015/06/30 12:34:56')
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    lyr.CreateFeature(f)
+    f = None
+    
+    # Transition from BoundCopy to UnboundCopy
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 1)'))
+    lyr.CreateFeature(f)
+    f = None
+
+    lyr.SyncToDisk()
+
+    oci_ds2 = ogr.Open( os.environ['OCI_DSNAME'] )
+
+    lyr = oci_ds2.GetLayerByName('ogr_oci_21')
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_string')).GetDefault() != "'a''b'":
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_int')).GetDefault() != '123':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_real')).GetDefault() != '1.23':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_nodefault')).GetDefault() is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_datetime')).GetDefault() != 'CURRENT_TIMESTAMP':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_datetime2')).GetDefault() != "'2015/06/30 12:34:56'":
+        gdaltest.post_reason('fail')
+        print(lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_datetime2')).GetDefault())
+        return 'fail'
+    #if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_date')).GetDefault() != "CURRENT_DATE":
+    #    gdaltest.post_reason('fail')
+    #    print(lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_date')).GetDefault())
+    #    return 'fail'
+    #if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_time')).GetDefault() != "CURRENT_TIME":
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetField('field_string') != 'c':
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetField('field_string') != 'a\'b' or f.GetField('field_int') != 123 or \
+       f.GetField('field_real') != 1.23 or \
+       f.IsFieldSet('field_nodefault') or not f.IsFieldSet('field_datetime')  or \
+       f.GetField('field_datetime2') != '2015/06/30 12:34:56':
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'fail'
+
+    gdal.Unlink('/vsimem/ogr_gpkg_24.gpkg')
+
+    return 'success'
+
+###############################################################################
 # 
 
 def ogr_oci_cleanup():
@@ -826,6 +1081,10 @@ def ogr_oci_cleanup():
     gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:test_MULTIPOLYGON' )
     gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:test_GEOMETRYCOLLECTION' )
     gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:test_NONE' )
+    gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:testdate' )
+    gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:ogr_oci_20' )
+    gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:ogr_oci_20bis' )
+    gdaltest.oci_ds.ExecuteSQL( 'DELLAYER:ogr_oci_21' )
 
     gdaltest.oci_ds.Destroy()
     gdaltest.oci_ds = None
@@ -852,6 +1111,9 @@ gdaltest_list = [
     ogr_oci_16,
     ogr_oci_17,
     ogr_oci_18,
+    ogr_oci_19,
+    ogr_oci_20,
+    ogr_oci_21,
     ogr_oci_cleanup ]
 
 if __name__ == '__main__':

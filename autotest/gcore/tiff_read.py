@@ -29,7 +29,6 @@
 
 import os
 import sys
-import string
 import shutil
 
 sys.path.append( '../pymod' )
@@ -851,7 +850,7 @@ def tiff_read_corrupted_gtiff():
     gdal.PushErrorHandler( 'CPLQuietErrorHandler' )
     ds = gdal.Open('data/corrupted_gtiff_tags.tif')
     gdal.PopErrorHandler()
-    ds = None
+    del ds
 
     err_msg = gdal.GetLastErrorMsg()
     if err_msg.find('IO error during') == -1 and \
@@ -871,7 +870,7 @@ def tiff_read_tag_without_null_byte():
     if gdal.GetLastErrorType() != 0:
         gdaltest.post_reason( 'should have not emitted a warning, but only a CPLDebug() message' )
         return 'fail'
-    ds = None
+    del ds
 
     return 'success'
 
@@ -920,12 +919,12 @@ def tiff_read_rpc_txt():
     os.remove('tmp/test.tif')
     os.remove('tmp/test_rpc.txt')
 
-    if rpc_md['HEIGHT_OFF'] != ' +0300.000 meters':
+    if rpc_md['HEIGHT_OFF'] != '+0300.000 meters':
         gdaltest.post_reason('HEIGHT_OFF wrong:"'+rpc_md['HEIGHT_OFF']+'"')
         return 'fail'
 
     if rpc_md['LINE_DEN_COEFF'].find(
-        ' +1.000000000000000E+00  -5.207696939454288E-03') != 0:
+        '+1.000000000000000E+00 -5.207696939454288E-03') != 0:
         print(rpc_md['LINE_DEN_COEFF'])
         gdaltest.post_reason('LINE_DEN_COEFF wrong')
         return 'fail'
@@ -987,7 +986,7 @@ def tiff_dos_strip_chop():
     gdal.PushErrorHandler('CPLQuietErrorHandler')
     ds = gdal.Open('data/tiff_dos_strip_chop.tif')
     gdal.PopErrorHandler()
-    ds = None
+    del ds
 
     return 'success'
 
@@ -1119,11 +1118,12 @@ def tiff_read_online_2():
         print('cannot open URL')
         return 'skip'
 
+    old_val = gdal.GetConfigOption('GTIFF_DIRECT_IO')
     gdal.SetConfigOption('GTIFF_DIRECT_IO', 'YES')
     gdal.SetConfigOption('CPL_VSIL_CURL_ALLOWED_EXTENSIONS', '.tif')
     gdal.SetConfigOption('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR')
     ds = gdal.Open('/vsicurl/http://download.osgeo.org/gdal/data/gtiff/utm.tif')
-    gdal.SetConfigOption('GTIFF_DIRECT_IO', None)
+    gdal.SetConfigOption('GTIFF_DIRECT_IO', old_val)
     gdal.SetConfigOption('CPL_VSIL_CURL_ALLOWED_EXTENSIONS', None)
     gdal.SetConfigOption('GDAL_DISABLE_READDIR_ON_OPEN', None)
 
@@ -1265,6 +1265,878 @@ def tiff_read_irregular_tile_size_jpeg_in_tiff():
 
     return 'success'
 
+###############################################################################
+# Test GTIFF_DIRECT_IO optimization
+
+def tiff_direct_and_virtual_mem_io():
+
+  # Test with pixel-interleaved and band-interleaved datasets
+  for dt in [ gdal.GDT_Byte, gdal.GDT_Int16 ]:
+
+    src_ds = gdal.Open('data/stefan_full_rgba.tif')
+    dt_size = 1
+    if dt == gdal.GDT_Int16:
+        dt_size = 2
+        mem_ds = gdal.GetDriverByName('MEM').Create('', src_ds.RasterXSize, src_ds.RasterYSize, src_ds.RasterCount, dt)
+        data = src_ds.ReadRaster(0, 0, src_ds.RasterXSize, src_ds.RasterYSize, buf_type = dt)
+        new_vals = []
+        for i in range(4*src_ds.RasterXSize*src_ds.RasterYSize):
+            if sys.version_info >= (3,0,0):
+                new_vals.append(chr(data[2*i]).encode('latin1'))
+                new_vals.append(chr(255 - data[2*i]).encode('latin1'))
+            else:
+                new_vals.append(data[2*i])
+                new_vals.append(chr(255 - ord(data[2*i])))
+        if sys.version_info >= (3,0,0):
+            data = ''.encode('latin1').join(new_vals)
+        else:
+            data = ''.join(new_vals)
+        mem_ds.WriteRaster(0, 0, src_ds.RasterXSize, src_ds.RasterYSize, data, buf_type = dt)
+        src_ds = mem_ds
+
+    for truncated in [False, True]:
+     if truncated:
+         nitermax = 4
+         options = [('GTIFF_VIRTUAL_MEM_IO', '/vsimem')]
+     else:
+         nitermax = 8
+         options = [('GTIFF_DIRECT_IO', '/vsimem'), ('GTIFF_VIRTUAL_MEM_IO', 'tmp'), ('GTIFF_VIRTUAL_MEM_IO', '/vsimem')]
+     for (option, prefix) in options:
+      if option == 'GTIFF_DIRECT_IO':
+          niter = 2
+      else:
+          niter = nitermax
+      for i in range(niter):
+
+        if i == 0:
+            filename = '%s/tiff_direct_io_contig.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').CreateCopy(filename, src_ds)
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 1:
+            filename = '%s/tiff_direct_io_separate.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').CreateCopy(filename, src_ds, options = ['INTERLEAVE=BAND'])
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 2:
+            filename = '%s/tiff_direct_io_tiled_contig.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').CreateCopy(filename, src_ds, options = ['TILED=YES', 'BLOCKXSIZE=32', 'BLOCKYSIZE=16'])
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 3:
+            filename = '%s/tiff_direct_io_tiled_separate.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').CreateCopy(filename, src_ds, options = ['TILED=YES', 'BLOCKXSIZE=32', 'BLOCKYSIZE=16', 'INTERLEAVE=BAND'])
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 4:
+            filename = '%s/tiff_direct_io_sparse.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').Create(filename, 165, 150, 4, dt, options = ['SPARSE_OK=YES'])
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 5:
+            filename = '%s/tiff_direct_io_sparse_separate.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').Create(filename, 165, 150, 4, dt, options = ['SPARSE_OK=YES', 'INTERLEAVE=BAND'])
+            out_ds.FlushCache()
+            out_ds = None
+        elif i == 6:
+            filename = '%s/tiff_direct_io_sparse_tiled.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').Create(filename, 165, 150, 4, dt, options = ['SPARSE_OK=YES', 'TILED=YES', 'BLOCKXSIZE=32', 'BLOCKYSIZE=16'])
+            out_ds.FlushCache()
+            out_ds = None
+        else:
+            filename = '%s/tiff_direct_io_sparse_tiled_separate.tif' % prefix
+            out_ds = gdal.GetDriverByName('GTiff').Create(filename, 165, 150, 4, dt, options = ['SPARSE_OK=YES', 'TILED=YES', 'BLOCKXSIZE=32', 'BLOCKYSIZE=16', 'INTERLEAVE=BAND'])
+            out_ds.FlushCache()
+            out_ds = None
+
+        if truncated:
+            f = gdal.VSIFOpenL(filename, 'rb')
+            data = gdal.VSIFReadL(1, 1000000, f)
+            gdal.VSIFCloseL(f)
+            f = gdal.VSIFOpenL(filename, 'wb')
+            gdal.VSIFWriteL(data, 1, len(data)-1, f)
+            gdal.VSIFCloseL(f)
+
+        ds = gdal.Open(filename)
+        xoff = int(ds.RasterXSize/4)
+        yoff = int(ds.RasterYSize/4)
+        xsize = int(ds.RasterXSize/2)
+        ysize = int(ds.RasterXSize/2)
+
+        if truncated:
+            gdal.PushErrorHandler()
+        ref_data_native_type = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize)
+        ref_data_native_type_whole = ds.GetRasterBand(1).ReadRaster()
+        ref_data_native_type_downsampled = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2))
+        ref_data_native_type_downsampled_not_nearest = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), resample_alg = gdal.GRIORA_Bilinear)
+        ref_data_native_type_upsampled = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = 4 * xsize, buf_ysize = 4 * ysize)
+        ref_data_native_type_custom_spacings = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_pixel_space = 4 * dt_size)
+        ref_data_float32 = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32)
+        ref_4bands_data_native_type = ds.ReadRaster(xoff, yoff, xsize, ysize)
+        ref_4bands_data_native_type_whole = ds.ReadRaster()
+        ref_4bands_data_native_type_downsampled = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2))
+        ref_4bands_data_native_type_downsampled_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        ref_4bands_data_native_type_downsampled_not_nearest = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), resample_alg = gdal.GRIORA_Bilinear)
+        ref_4bands_data_native_type_upsampled = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = 4 * xsize, buf_ysize = 4 * ysize)
+        ref_4bands_data_native_type_unordered_list = ds.ReadRaster(xoff, yoff, xsize, ysize, band_list = [4,3,2,1])
+        ref_4bands_data_native_type_pixel_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        ref_4bands_data_native_type_pixel_interleaved_whole = ds.ReadRaster(buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        ref_3bands_data_native_type_pixel_interleaved_with_extra_space = ds.ReadRaster(xoff, yoff, xsize, ysize, band_list = [1, 2, 3], buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        ref_4bands_data_float32 = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32)
+        ref_4bands_data_float32_pixel_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32, buf_pixel_space = 4*4, buf_band_space = 1*4)
+        if truncated:
+            gdal.PopErrorHandler()
+        ds = None
+
+        if truncated:
+            gdal.PushErrorHandler()
+        old_val = gdal.GetConfigOption(option)
+        gdal.SetConfigOption(option, 'YES')
+        ds = gdal.Open(filename)
+        band_interleaved = ds.GetMetadataItem('INTERLEAVE', 'IMAGE_STRUCTURE') == 'BAND'
+        got_data_native_type = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize)
+        got_data_native_type_whole = ds.GetRasterBand(1).ReadRaster()
+        got_data_native_type_downsampled = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2))
+        got_data_native_type_downsampled_not_nearest = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), resample_alg = gdal.GRIORA_Bilinear)
+        got_data_native_type_upsampled = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = 4 * xsize, buf_ysize = 4 * ysize)
+        got_data_native_type_custom_spacings = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_pixel_space = 4 * dt_size)
+        got_data_float32 = ds.GetRasterBand(1).ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32)
+        got_4bands_data_native_type = ds.ReadRaster(xoff, yoff, xsize, ysize)
+        got_4bands_data_native_type_whole = ds.ReadRaster()
+        got_4bands_data_native_type_bottom_right_downsampled = ds.ReadRaster(ds.RasterXSize-2, ds.RasterYSize - 1, 2, 1, buf_xsize = 1, buf_ysize = 1, buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        got_4bands_data_native_type_downsampled = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2))
+        got_4bands_data_native_type_downsampled_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        got_4bands_data_native_type_downsampled_not_nearest = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = int(xsize/2), buf_ysize = int(ysize/2), resample_alg = gdal.GRIORA_Bilinear)
+        got_4bands_data_native_type_upsampled = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_xsize = 4 * xsize, buf_ysize = 4 * ysize)
+        got_4bands_data_native_type_unordered_list = ds.ReadRaster(xoff, yoff, xsize, ysize, band_list = [4,3,2,1])
+        got_4bands_data_native_type_pixel_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        got_4bands_data_native_type_pixel_interleaved_whole = ds.ReadRaster(buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        got_3bands_data_native_type_pixel_interleaved_with_extra_space = ds.ReadRaster(xoff, yoff, xsize, ysize, band_list = [1, 2, 3], buf_pixel_space = 4 * dt_size, buf_band_space = dt_size)
+        got_4bands_data_float32 = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32)
+        got_4bands_data_float32_pixel_interleaved = ds.ReadRaster(xoff, yoff, xsize, ysize, buf_type = gdal.GDT_Float32, buf_pixel_space = 4*4, buf_band_space = 1*4)
+        ds = None
+        gdal.SetConfigOption(option, old_val)
+        if truncated:
+            gdal.PopErrorHandler()
+
+        gdal.Unlink(filename)
+
+        if ref_data_native_type != got_data_native_type:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if truncated and not band_interleaved:
+            if got_data_native_type_whole is not None:
+                gdaltest.post_reason('fail')
+                print(truncated)
+                print(band_interleaved)
+                print(option)
+                print(i)
+                return 'fail'
+        elif ref_data_native_type_whole != got_data_native_type_whole:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_data_native_type_downsampled != got_data_native_type_downsampled:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if not truncated and ref_data_native_type_downsampled_not_nearest != got_data_native_type_downsampled_not_nearest:
+            gdaltest.post_reason('fail')
+            print(truncated)
+            print(band_interleaved)
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_data_native_type_upsampled != got_data_native_type_upsampled:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        for y in range(ysize):
+            for x in range(xsize):
+              for k in range(dt_size):
+                if ref_data_native_type_custom_spacings[(y*xsize+x)*4*dt_size+k] != got_data_native_type_custom_spacings[(y*xsize+x)*4*dt_size+k]:
+                    gdaltest.post_reason('fail')
+                    print(option)
+                    print(i)
+                    return 'fail'
+
+        if ref_data_float32 != got_data_float32:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if not truncated and ref_4bands_data_native_type != got_4bands_data_native_type:
+            gdaltest.post_reason('fail')
+            print(truncated)
+            print(band_interleaved)
+            print(option)
+            print(i)
+            return 'fail'
+
+        if truncated:
+            if got_4bands_data_native_type_whole is not None:
+                gdaltest.post_reason('fail')
+                print(option)
+                print(i)
+                return 'fail'
+        elif ref_4bands_data_native_type_whole != got_4bands_data_native_type_whole:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if truncated:
+            if got_4bands_data_native_type_pixel_interleaved_whole is not None:
+                gdaltest.post_reason('fail')
+                print(option)
+                print(i)
+                return 'fail'
+        elif ref_4bands_data_native_type_pixel_interleaved_whole != got_4bands_data_native_type_pixel_interleaved_whole:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if truncated and got_4bands_data_native_type_bottom_right_downsampled is not None:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if truncated:
+            continue
+
+        if ref_4bands_data_native_type_downsampled != got_4bands_data_native_type_downsampled:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_native_type_downsampled_interleaved != got_4bands_data_native_type_downsampled_interleaved:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_native_type_downsampled_not_nearest != got_4bands_data_native_type_downsampled_not_nearest:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_native_type_upsampled != got_4bands_data_native_type_upsampled:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_native_type_unordered_list != got_4bands_data_native_type_unordered_list:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_native_type_pixel_interleaved != got_4bands_data_native_type_pixel_interleaved:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        for y in range(ysize):
+            for x in range(xsize):
+                for b in range(3):
+                  for k in range(dt_size):
+                    if ref_3bands_data_native_type_pixel_interleaved_with_extra_space[((y*xsize+x)*4+b)*dt_size+k] != got_3bands_data_native_type_pixel_interleaved_with_extra_space[((y*xsize+x)*4+b)*dt_size+k]:
+                        gdaltest.post_reason('fail')
+                        print(option)
+                        print(i)
+                        print(y)
+                        print(x)
+                        print(b)
+                        return 'fail'
+
+        if ref_4bands_data_float32 != got_4bands_data_float32:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+        if ref_4bands_data_float32_pixel_interleaved != got_4bands_data_float32_pixel_interleaved:
+            gdaltest.post_reason('fail')
+            print(option)
+            print(i)
+            return 'fail'
+
+  ds = gdal.Open('data/byte.tif') # any GTiff file will do
+  unreached = ds.GetMetadataItem('UNREACHED_VIRTUALMEMIO_CODE_PATH', '_DEBUG_')
+  ds = None
+  if unreached:
+      gdaltest.post_reason('missing code coverage in VirtualMemIO()')
+      print('unreached = %s' % unreached)
+      return 'fail'
+
+  return 'success'
+
+###############################################################################
+# Check read Digital Globe metadata IMD & RPB format
+
+def tiff_read_md1():
+
+    try:
+        os.remove('data/md_dg.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_dg.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2010-04-01 12:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_dg.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_dg.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Digital Globe metadata XML format
+
+def tiff_read_md2():
+
+    try:
+        os.remove('data/md_dg_2.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_dg_2.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 2:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2011-05-01 13:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_dg_2.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_dg_2.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read GeoEye metadata format
+
+def tiff_read_md3():
+
+    try:
+        os.remove('data/md_ge_rgb_0010000.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_ge_rgb_0010000.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2012-06-01 14:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_ge_rgb_0010000.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_ge_rgb_0010000.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read OrbView metadata format
+
+def tiff_read_md4():
+
+    try:
+        os.remove('data/md_ov.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_ov.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2013-07-01 15:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_ov.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_ov.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Resurs-DK1 metadata format
+
+def tiff_read_md5():
+
+    try:
+        os.remove('data/md_rdk1.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_rdk1.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 2:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 4:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2014-08-01 16:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_rdk1.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_rdk1.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Landsat metadata format
+
+def tiff_read_md6():
+
+    try:
+        os.remove('data/md_ls_b1.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_ls_b1.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 2:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 4:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2015-09-01 17:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_ls_b1.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_ls_b1.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Spot metadata format
+
+def tiff_read_md7():
+
+    try:
+        os.remove('data/spot/md_spot.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/spot/md_spot.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 2:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 4:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2001-03-01 00:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/spot/md_spot.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/spot/md_spot.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read RapidEye metadata format
+
+def tiff_read_md8():
+
+    try:
+        os.remove('data/md_re.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_re.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 2:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 4:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2010-02-01 12:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_re.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_re.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Alos metadata format
+
+def tiff_read_md9():
+
+    try:
+        os.remove('data/alos/IMG-md_alos.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/alos/IMG-md_alos.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2010-07-01 00:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/alos/IMG-md_alos.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/alos/IMG-md_alos.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Eros metadata format
+
+def tiff_read_md10():
+
+    try:
+        os.remove('data/md_eros.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_eros.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2013-04-01 11:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_eros.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_eros.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Check read Kompsat metadata format
+
+def tiff_read_md11():
+
+    try:
+        os.remove('data/md_kompsat.tif.aux.xml')
+    except:
+        pass
+
+    ds = gdal.Open( 'data/md_kompsat.tif', gdal.GA_ReadOnly )
+    filelist = ds.GetFileList()
+
+    if len(filelist) != 3:
+        gdaltest.post_reason( 'did not get expected file list.' )
+        return 'fail'
+
+    metadata = ds.GetMetadataDomainList()
+    if len(metadata) != 5:
+        gdaltest.post_reason( 'did not get expected metadata list.' )
+        return 'fail'
+
+    md = ds.GetMetadata('IMAGERY')
+    if 'SATELLITEID' not in md:
+        print('SATELLITEID not present in IMAGERY Domain')
+        return 'fail'
+    if 'CLOUDCOVER' not in md:
+        print('CLOUDCOVER not present in IMAGERY Domain')
+        return 'fail'
+    if 'ACQUISITIONDATETIME' not in md:
+        print('ACQUISITIONDATETIME not present in IMAGERY Domain')
+        return 'fail'
+
+    # Test UTC date
+    if md['ACQUISITIONDATETIME'] != '2007-05-01 07:00:00':
+        print('bad value for IMAGERY[ACQUISITIONDATETIME]')
+        return 'fail'
+
+    ds = None
+
+    try:
+        os.stat('data/md_kompsat.tif.aux.xml')
+        gdaltest.post_reason('Expected not generation of data/md_kompsat.tif.aux.xml')
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Test reading a TIFFTAG_GDAL_NODATA with empty text
+
+def tiff_read_empty_nodata_tag():
+
+    ds = gdal.Open('data/empty_nodata.tif')
+    if ds.GetRasterBand(1).GetNoDataValue() is not None:
+        gdaltest.post_reason('fail')
+        print(ds.GetRasterBand(1).GetNoDataValue())
+        return 'fail'
+
+    return 'success'
+
 ###############################################################################################
 
 for item in init_list:
@@ -1313,12 +2185,28 @@ gdaltest_list.append( (tiff_dos_strip_chop) )
 gdaltest_list.append( (tiff_read_exif_and_gps) )
 gdaltest_list.append( (tiff_jpeg_rgba_pixel_interleaved) )
 gdaltest_list.append( (tiff_jpeg_rgba_band_interleaved) )
-gdaltest_list.append( (tiff_read_online_1) )
-gdaltest_list.append( (tiff_read_online_2) )
 gdaltest_list.append( (tiff_read_huge4GB) )
 gdaltest_list.append( (tiff_read_bigtiff) )
 gdaltest_list.append( (tiff_read_tiff_metadata) )
 gdaltest_list.append( (tiff_read_irregular_tile_size_jpeg_in_tiff) )
+gdaltest_list.append( (tiff_direct_and_virtual_mem_io) )
+gdaltest_list.append( (tiff_read_empty_nodata_tag) )
+
+gdaltest_list.append( (tiff_read_online_1) )
+gdaltest_list.append( (tiff_read_online_2) )
+gdaltest_list.append( (tiff_read_md1) )
+gdaltest_list.append( (tiff_read_md2) )
+gdaltest_list.append( (tiff_read_md3) )
+gdaltest_list.append( (tiff_read_md4) )
+gdaltest_list.append( (tiff_read_md5) )
+gdaltest_list.append( (tiff_read_md6) )
+gdaltest_list.append( (tiff_read_md7) )
+gdaltest_list.append( (tiff_read_md8) )
+gdaltest_list.append( (tiff_read_md9) )
+gdaltest_list.append( (tiff_read_md10) )
+gdaltest_list.append( (tiff_read_md11) )
+
+#gdaltest_list = [ tiff_direct_and_virtual_mem_io ]
 
 if __name__ == '__main__':
 

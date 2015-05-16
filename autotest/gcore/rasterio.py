@@ -29,14 +29,12 @@
 # DEALINGS IN THE SOFTWARE.
 ###############################################################################
 
-import os
 import sys
 
 sys.path.append( '../pymod' )
 
 import gdaltest
 from osgeo import gdal
-from osgeo import gdalconst
 
 ###############################################################################
 # Test writing a 1x1 buffer to a 10x6 raster and read it back
@@ -234,7 +232,6 @@ def rasterio_5():
             print(error_msg)
             return 'fail'
 
-        import sys
         # This should only fail on a 32bit build
         try:
             maxsize = sys.maxint
@@ -372,6 +369,11 @@ def rasterio_8_progress_callback_2(pct, message, user_data):
 def rasterio_8():
 
     ds = gdal.Open('data/byte.tif')
+
+    # Progress not implemented yet
+    if gdal.GetConfigOption('GTIFF_DIRECT_IO') == 'YES' or \
+       gdal.GetConfigOption('GTIFF_VIRTUAL_MEM_IO') == 'YES':
+        return 'skip'
     
     # Test RasterBand.ReadRaster
     tab = [ 0, True ]
@@ -529,6 +531,26 @@ def rasterio_9():
         return 'fail'
     cs = rasterio_9_checksum(data, 10, 10, data_type = gdal.GDT_Int16)
     if cs != 1211: # checksum of gdal_translate data/byte.tif out.tif -outsize 10 10 -r BILINEAR
+        gdaltest.post_reason('failure')
+        print(cs)
+        return 'fail'
+
+    if abs(tab[0] - 1.0) > 1e-5:
+        gdaltest.post_reason('failure')
+        return 'fail'
+
+    # Test RasterBand.ReadRaster, with Lanczos
+    tab = [ 0, None ]
+    data = ds.GetRasterBand(1).ReadRaster(buf_xsize = 10,
+                                          buf_ysize = 10,
+                                          resample_alg = gdal.GRIORA_Lanczos,
+                                          callback = rasterio_9_progress_callback,
+                                          callback_data = tab)
+    if data is None:
+        gdaltest.post_reason('failure')
+        return 'fail'
+    cs = rasterio_9_checksum(data, 10, 10)
+    if cs != 1154: # checksum of gdal_translate data/byte.tif out.tif -outsize 10 10 -r LANCZOS
         gdaltest.post_reason('failure')
         print(cs)
         return 'fail'
@@ -729,6 +751,38 @@ def rasterio_9():
 
     return 'success'
 
+###############################################################################
+# Test error when getting a block
+
+def rasterio_10():
+    ds = gdal.Open('data/byte_truncated.tif')
+
+    gdal.PushErrorHandler()
+    data = ds.GetRasterBand(1).ReadRaster()
+    gdal.PopErrorHandler()
+    if data is not None:
+        gdaltest.post_reason('failure')
+        return 'fail'
+
+    # Change buffer type
+    gdal.PushErrorHandler()
+    data = ds.GetRasterBand(1).ReadRaster(buf_type = gdal.GDT_Int16)
+    gdal.PopErrorHandler()
+    if data is not None:
+        gdaltest.post_reason('failure')
+        return 'fail'
+
+    # Resampling case
+    gdal.PushErrorHandler()
+    data = ds.GetRasterBand(1).ReadRaster(buf_xsize = 10,
+                                          buf_ysize = 10)
+    gdal.PopErrorHandler()
+    if data is not None:
+        gdaltest.post_reason('failure')
+        return 'fail'
+
+    return 'success'
+
 gdaltest_list = [
     rasterio_1,
     rasterio_2,
@@ -739,6 +793,7 @@ gdaltest_list = [
     rasterio_7,
     rasterio_8,
     rasterio_9,
+    rasterio_10,
     ]
 
 if __name__ == '__main__':

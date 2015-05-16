@@ -599,6 +599,21 @@ CPLXMLNode *CPLParseXMLString( const char *pszString )
     }
 
 /* -------------------------------------------------------------------- */
+/*      Check for a UTF-8 BOM and skip if found                         */
+/*                                                                      */
+/*      TODO: BOM is variable-length parameter and depends on encoding. */
+/*            Add BOM detection for other encodings.                    */
+/* -------------------------------------------------------------------- */
+
+    // Used to skip to actual beginning of XML data
+    if( ( (unsigned char)pszString[0] == 0xEF )
+        && ( (unsigned char)pszString[1] == 0xBB )
+        && ( (unsigned char)pszString[2] == 0xBF) )
+    {
+        pszString += 3;
+    }
+
+/* -------------------------------------------------------------------- */
 /*      Initialize parse context.                                       */
 /* -------------------------------------------------------------------- */
     sContext.pszInput = pszString;
@@ -1655,6 +1670,44 @@ CPLXMLNode *CPLCreateXMLElementAndValue( CPLXMLNode *psParent,
     CPLCreateXMLNode( psElementNode, CXT_Text, pszValue );
 
     return psElementNode;
+}
+
+/************************************************************************/
+/*                    CPLCreateXMLElementAndValue()                     */
+/************************************************************************/
+
+/**
+ * \brief Create an attribute and text value.
+ *
+ * This is function is a convenient short form for:
+ *
+ * \code
+ *   CPLXMLNode *psAttributeNode;
+ *
+ *   psAttributeNode = CPLCreateXMLNode( psParent, CXT_Attribute, pszName );
+ *   CPLCreateXMLNode( psAttributeNode, CXT_Text, pszValue );
+ * \endcode
+ *
+ * It creates a CXT_Attribute node, with a CXT_Text child, and
+ * attaches the element to the passed parent.
+ *
+ * @param psParent the parent node to which the resulting node should
+ * be attached.  May be NULL to keep as freestanding. 
+ *
+ * @param pszName the attribute name to create.
+ * @param pszValue the text to attach to the attribute. Must not be NULL. 
+ *
+ * @since GDAL 2.0
+ */
+
+void CPLAddXMLAttributeAndValue( CPLXMLNode *psParent,
+                                 const char *pszName,
+                                 const char *pszValue )
+{
+    CPLXMLNode *psAttributeNode;
+
+    psAttributeNode = CPLCreateXMLNode( psParent, CXT_Attribute, pszName );
+    CPLCreateXMLNode( psAttributeNode, CXT_Text, pszValue );
 }
 
 /************************************************************************/

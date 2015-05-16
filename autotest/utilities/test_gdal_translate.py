@@ -494,7 +494,6 @@ def test_gdal_translate_18():
 
     # Check that all datasets are closed
     if ret_stderr.find('Open GDAL Datasets') != -1:
-        print(ret)
         return 'fail'
 
     ds = gdal.Open('tmp/test18_2.tif')
@@ -861,6 +860,85 @@ def test_gdal_translate_30():
     return 'success'
 
 ###############################################################################
+# Test -projwin_srs option
+
+def test_gdal_translate_31():
+    if test_cli_utilities.get_gdal_translate_path() is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_gdal_translate_path() + ' -projwin_srs EPSG:4267 -projwin -117.641168620797 33.9023526904262 -117.628110837847 33.8915970129613 ../gcore/data/byte.tif tmp/test_gdal_translate_31.tif')
+
+    ds = gdal.Open('tmp/test_gdal_translate_31.tif')
+    if ds is None:
+        return 'fail'
+
+    if ds.GetRasterBand(1).Checksum() != 4672:
+        gdaltest.post_reason('Bad checksum')
+        return 'fail'
+
+    if not gdaltest.geotransform_equals(gdal.Open('../gcore/data/byte.tif').GetGeoTransform(), ds.GetGeoTransform(), 1e-9) :
+        gdaltest.post_reason('Bad geotransform')
+        return 'fail'
+
+    ds = None
+
+    return 'success'
+
+###############################################################################
+# Test subsetting a file with a RPC
+
+def test_gdal_translate_32():
+    if test_cli_utilities.get_gdal_translate_path() is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_gdal_translate_path() + ' ../gcore/data/byte_rpc.tif tmp/test_gdal_translate_32.tif -srcwin 1 2 13 14 -outsize 150% 300%')
+    ds = gdal.Open('tmp/test_gdal_translate_32.tif')
+    md = ds.GetMetadata('RPC')
+    if abs(float(md['LINE_OFF']) - 47496) > 1e-5 or \
+       abs(float(md['LINE_SCALE']) - 47502) > 1e-5 or \
+       abs(float(md['SAMP_OFF']) - 19676.6923076923) > 1e-5 or \
+       abs(float(md['SAMP_SCALE']) - 19678.1538461538) > 1e-5:
+           gdaltest.post_reason('fail')
+           print(md)
+           return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test -outsize option in auto mode
+
+def test_gdal_translate_33():
+    if test_cli_utilities.get_gdal_translate_path() is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_gdal_translate_path() + ' -outsize 100 0 ../gdrivers/data/small_world.tif tmp/test_gdal_translate_33.tif')
+
+    ds = gdal.Open('tmp/test_gdal_translate_33.tif')
+    if ds.RasterYSize != 50:
+        gdaltest.post_reason('fail')
+        print(ds.RasterYSize)
+        return 'fail'
+    ds = None
+
+    gdaltest.runexternal(test_cli_utilities.get_gdal_translate_path() + ' -outsize 0 100 ../gdrivers/data/small_world.tif tmp/test_gdal_translate_33.tif')
+
+    ds = gdal.Open('tmp/test_gdal_translate_33.tif')
+    if ds.RasterXSize != 200:
+        gdaltest.post_reason('fail')
+        print(ds.RasterYSize)
+        return 'fail'
+    ds = None
+
+    os.unlink('tmp/test_gdal_translate_33.tif')
+
+    (out, err) = gdaltest.runexternal_out_and_err(test_cli_utilities.get_gdal_translate_path() + ' -outsize 0 0 ../gdrivers/data/small_world.tif tmp/test_gdal_translate_33.tif')
+    if err.find('-outsize 0 0 invalid') < 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
 # Cleanup
 
 def test_gdal_translate_cleanup():
@@ -959,6 +1037,14 @@ def test_gdal_translate_cleanup():
         os.remove('tmp/test_gdal_translate_30.tif')
     except:
         pass
+    try:
+        os.remove('tmp/test_gdal_translate_31.tif')
+    except:
+        pass
+    try:
+        os.remove('tmp/test_gdal_translate_32.tif')
+    except:
+        pass
     return 'success'
 
 gdaltest_list = [
@@ -992,6 +1078,9 @@ gdaltest_list = [
     test_gdal_translate_28,
     test_gdal_translate_29,
     test_gdal_translate_30,
+    test_gdal_translate_31,
+    test_gdal_translate_32,
+    test_gdal_translate_33,
     test_gdal_translate_cleanup
     ]
 

@@ -136,8 +136,8 @@ typedef enum {
                                 "Lambert_Azimuthal_Equal_Area"
 #define SRS_PT_MERCATOR_1SP     "Mercator_1SP"
 #define SRS_PT_MERCATOR_2SP     "Mercator_2SP"
-// Mercator_Auxilary_Sphere is used used by ESRI to mean EPSG:3875
-#define SRS_PT_MERCATOR_AUXILARY_SPHERE                                 \
+// Mercator_Auxiliary_Sphere is used used by ESRI to mean EPSG:3875
+#define SRS_PT_MERCATOR_AUXILIARY_SPHERE                                 \
                                 "Mercator_Auxiliary_Sphere"
 #define SRS_PT_MILLER_CYLINDRICAL "Miller_Cylindrical"
 #define SRS_PT_MOLLWEIDE        "Mollweide"
@@ -340,8 +340,7 @@ OGRErr CPL_DLL OSRImportFromDict( OGRSpatialReferenceH, const char *,
                                   const char * );
 OGRErr CPL_DLL OSRImportFromPanorama( OGRSpatialReferenceH, long, long, long,
                                       double * );
-OGRErr CPL_DLL OSRImportFromOzi( OGRSpatialReferenceH , const char *, const char *,
-                                 const char * );
+OGRErr CPL_DLL OSRImportFromOzi( OGRSpatialReferenceH , const char * const *);
 OGRErr CPL_DLL OSRImportFromMICoordSys( OGRSpatialReferenceH, const char *);
 OGRErr CPL_DLL OSRImportFromERM( OGRSpatialReferenceH,
                                  const char *, const char *, const char * );
@@ -716,6 +715,8 @@ OGRErr CPL_DLL OSRSetWagner( OGRSpatialReferenceH hSRS, int nVariation,
 OGRErr CPL_DLL OSRSetQSC( OGRSpatialReferenceH hSRS,
                               double dfCenterLat, double dfCenterLong );
 
+double CPL_DLL OSRCalcInvFlattening( double dfSemiMajor, double dfSemiMinor );
+double CPL_DLL OSRCalcSemiMinorFromInvFlattening( double dfSemiMajor, double dfInvFlattening );
 
 void CPL_DLL OSRCleanup( void );
 

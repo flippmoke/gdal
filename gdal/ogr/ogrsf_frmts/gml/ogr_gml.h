@@ -52,7 +52,7 @@ class OGRGMLLayer : public OGRLayer
 {
     OGRFeatureDefn     *poFeatureDefn;
 
-    int                 iNextGMLId;
+    GIntBig             iNextGMLId;
     int                 nTotalGMLCount;
     int                 bInvalidFIDFound;
     char                *pszFIDPrefix;
@@ -80,7 +80,7 @@ class OGRGMLLayer : public OGRLayer
     void                ResetReading();
     OGRFeature *        GetNextFeature();
 
-    int                 GetFeatureCount( int bForce = TRUE );
+    GIntBig             GetFeatureCount( int bForce = TRUE );
     OGRErr              GetExtent(OGREnvelope *psExtent, int bForce = TRUE);
 
     OGRErr              ICreateFeature( OGRFeature *poFeature );
@@ -151,14 +151,19 @@ class OGRGMLDataSource : public OGRDataSource
     GMLFeature         *poStoredGMLFeature;
     OGRGMLLayer        *poLastReadLayer;
 
-    void                FindAndParseBoundedBy(VSILFILE* fp);
+    void                FindAndParseTopElements(VSILFILE* fp);
     void                SetExtents(double dfMinX, double dfMinY, double dfMaxX, double dfMaxY);
+    
+    void                BuildJointClassFromXSD();
+    void                BuildJointClassFromScannedSchema();
+    
+    void                WriteTopElements();
 
   public:
                         OGRGMLDataSource();
                         ~OGRGMLDataSource();
 
-    int                 Open( const char * );
+    int                 Open( GDALOpenInfo* poOpenInfo );
     int                 Create( const char *pszFile, char **papszOptions );
 
     const char          *GetName() { return pszName; }

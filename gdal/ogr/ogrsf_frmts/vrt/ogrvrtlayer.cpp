@@ -53,6 +53,7 @@ OGRVRTGeomFieldProps::OGRVRTGeomFieldProps()
     bSrcClip = FALSE;
     poSrcRegion = NULL;
     bReportSrcColumn = TRUE;
+    bNullable = TRUE;
 }
 
 /************************************************************************/
@@ -237,7 +238,7 @@ int OGRVRTLayer::FastInitialize( CPLXMLNode *psLTree, const char *pszVRTDirector
      const char* pszFeatureCount = CPLGetXMLValue( psLTree, "FeatureCount", NULL );
      if( pszFeatureCount != NULL )
      {
-         nFeatureCount = atoi(pszFeatureCount);
+         nFeatureCount = CPLAtoGIntBig(pszFeatureCount);
      }
 
 /* -------------------------------------------------------------------- */
@@ -496,6 +497,8 @@ int OGRVRTLayer::ParseGeometryField(CPLXMLNode* psNode,
          poProps->sStaticEnvelope.MaxY = CPLAtof(pszExtentYMax);
      }
 
+    poProps->bNullable = CSLTestBoolean(CPLGetXMLValue( psNode, "nullable", "TRUE" ));
+
     return TRUE;
 }
 
@@ -508,7 +511,7 @@ int OGRVRTLayer::FullInitialize()
 {
     const char *pszSharedSetting = NULL;
     const char *pszSQL = NULL;
-    const char *pszFIDFieldName = NULL;
+    const char *pszSrcFIDFieldName = NULL;
     const char *pszStyleFieldName = NULL;
     CPLXMLNode *psChild = NULL;
     int bFoundGeometryField = FALSE;
@@ -617,7 +620,12 @@ try_again:
         }
         else
         {
-            poSrcDS = (GDALDataset*) OGROpenShared( pszSrcDSName, bUpdate, NULL );
+            char** papszOpenOptions = GDALDeserializeOpenOptionsFromXML(psLTree);
+            int nFlags = GDAL_OF_VECTOR | GDAL_OF_SHARED;
+            if( bUpdate ) nFlags |= GDAL_OF_UPDATE;
+            poSrcDS = (GDALDataset*) GDALOpenEx( pszSrcDSName, nFlags, NULL,
+                                (const char* const* )papszOpenOptions, NULL );
+            CSLDestroy(papszOpenOptions);
             /* Is it a VRT datasource ? */
             if (poSrcDS != NULL && poSrcDS->GetDriver() == poDS->GetDriver())
             {
@@ -630,7 +638,12 @@ try_again:
     {
         if (poDS->GetCallLevel() < 32)
         {
-            poSrcDS = (GDALDataset*) OGROpen( pszSrcDSName, bUpdate, NULL );
+            char** papszOpenOptions = GDALDeserializeOpenOptionsFromXML(psLTree);
+            int nFlags = GDAL_OF_VECTOR;
+            if( bUpdate ) nFlags |= GDAL_OF_UPDATE;
+            poSrcDS = (GDALDataset*) GDALOpenEx( pszSrcDSName, nFlags, NULL,
+                                (const char* const* )papszOpenOptions, NULL );
+            CSLDestroy(papszOpenOptions);
             /* Is it a VRT datasource ? */
             if (poSrcDS != NULL && poSrcDS->GetDriver() == poDS->GetDriver())
             {
@@ -671,6 +684,11 @@ try_again:
                       pszSrcDSName );
         goto error;
     }
+
+/* -------------------------------------------------------------------- */
+/*      Apply any metadata.                                             */
+/* -------------------------------------------------------------------- */
+    oMDMD.XMLInit( psLTree, TRUE );
 
 /* -------------------------------------------------------------------- */
 /*      Is this layer derived from an SQL query result?                 */
@@ -723,16 +741,16 @@ try_again:
         /* GeometryField elements */
         for( psChild = psLTree->psChild; psChild != NULL; psChild=psChild->psNext )
         {
-        if( psChild->eType == CXT_Element &&
-            EQUAL(psChild->pszValue,"GeometryField") )
-        {
-            if( !bFoundGeometryField )
+            if( psChild->eType == CXT_Element &&
+                EQUAL(psChild->pszValue,"GeometryField") )
             {
-                bFoundGeometryField = TRUE;
+                if( !bFoundGeometryField )
+                {
+                    bFoundGeometryField = TRUE;
+                }
+                else
+                    apoGeomFieldProps.push_back(new OGRVRTGeomFieldProps());
             }
-            else
-                apoGeomFieldProps.push_back(new OGRVRTGeomFieldProps());
-        }
         }
 
         if( !bFoundGeometryField )
@@ -757,6 +775,7 @@ try_again:
                     if( poFDefn->GetSpatialRef() != NULL )
                     poProps->poSRS = poFDefn->GetSpatialRef()->Clone();
                     poProps->iGeomField = iGeomField;
+                    poProps->bNullable = poFDefn->IsNullable();
                 }
             }
 
@@ -792,6 +811,7 @@ try_again:
             OGRGeomFieldDefn oFieldDefn( apoGeomFieldProps[i]->osName,
                                         apoGeomFieldProps[i]->eGeomType );
             oFieldDefn.SetSpatialRef( apoGeomFieldProps[i]->poSRS );
+            oFieldDefn.SetNullable( apoGeomFieldProps[i]->bNullable );
             poFeatureDefn->AddGeomFieldDefn(&oFieldDefn);
         }
 
@@ -805,19 +825,23 @@ try_again:
 /* -------------------------------------------------------------------- */
 /*      Figure out what should be used as an FID.                       */
 /* -------------------------------------------------------------------- */
-     pszFIDFieldName = CPLGetXMLValue( psLTree, "FID", NULL );
+     pszSrcFIDFieldName = CPLGetXMLValue( psLTree, "FID", NULL );
 
-     if( pszFIDFieldName != NULL )
+     if( pszSrcFIDFieldName != NULL )
      {
          iFIDField =
-             GetSrcLayerDefn()->GetFieldIndex( pszFIDFieldName );
+             GetSrcLayerDefn()->GetFieldIndex( pszSrcFIDFieldName );
          if( iFIDField == -1 )
          {
              CPLError( CE_Failure, CPLE_AppDefined, 
                        "Unable to identify FID field '%s'.",
-                       pszFIDFieldName );
+                       pszSrcFIDFieldName );
              goto error;
          }
+
+         // User facing FID column name. If not defined we will report the
+         // source FID column name only if it is exposed as a field too (#4637)
+         osFIDFieldName = CPLGetXMLValue( psLTree, "FID.name", "" );
      }
 
 /* -------------------------------------------------------------------- */
@@ -947,6 +971,17 @@ try_again:
                 goto error;
              }
              oFieldDefn.SetPrecision(nPrecision);
+
+/* -------------------------------------------------------------------- */
+/*      Nullable attribute.                                             */
+/* -------------------------------------------------------------------- */
+             int bNullable = CSLTestBoolean(CPLGetXMLValue( psChild, "nullable", "true" ));
+             oFieldDefn.SetNullable(bNullable);
+
+/* -------------------------------------------------------------------- */
+/*      Default attribute.                                              */
+/* -------------------------------------------------------------------- */
+             oFieldDefn.SetDefault(CPLGetXMLValue( psChild, "default",NULL));
 
 /* -------------------------------------------------------------------- */
 /*      Create the field.                                               */
@@ -1123,7 +1158,8 @@ int OGRVRTLayer::ResetSourceReading()
             {
                 OGRFieldType xType = poXField->GetType();
                 OGRFieldType yType = poYField->GetType();
-                if (!((xType == OFTReal || xType == OFTInteger) && (yType == OFTReal || yType == OFTInteger)))
+                if (!((xType == OFTReal || xType == OFTInteger || xType == OFTInteger64) &&
+                      (yType == OFTReal || yType == OFTInteger || yType == OFTInteger64)))
                 {
                     CPLError(CE_Warning, CPLE_AppDefined,
                             "The '%s' and/or '%s' fields of the source layer are not declared as numeric fields,\n"
@@ -1391,7 +1427,7 @@ retry:
     if( iFIDField == -1 )
         poDstFeat->SetFID( poSrcFeat->GetFID() );
     else
-        poDstFeat->SetFID( poSrcFeat->GetFieldAsInteger( iFIDField ) );
+        poDstFeat->SetFID( poSrcFeat->GetFieldAsInteger64( iFIDField ) );
     
 /* -------------------------------------------------------------------- */
 /*      Handle style string.                                            */
@@ -1585,7 +1621,7 @@ retry:
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *OGRVRTLayer::GetFeature( long nFeatureId )
+OGRFeature *OGRVRTLayer::GetFeature( GIntBig nFeatureId )
 
 {
     if (!bHasFullInitialized) FullInitialize();
@@ -1610,7 +1646,7 @@ OGRFeature *OGRVRTLayer::GetFeature( long nFeatureId )
         char* pszFIDQuery = (char*)CPLMalloc(strlen(pszFID) + 64);
 
         poSrcLayer->ResetReading();
-        sprintf( pszFIDQuery, "%s = %ld", pszFID, nFeatureId );
+        sprintf( pszFIDQuery, "%s = " CPL_FRMT_GIB, pszFID, nFeatureId );
         poSrcLayer->SetSpatialFilter( NULL );
         poSrcLayer->SetAttributeFilter( pszFIDQuery );
         CPLFree(pszFIDQuery);
@@ -1642,7 +1678,7 @@ OGRFeature *OGRVRTLayer::GetFeature( long nFeatureId )
 /*                          SetNextByIndex()                            */
 /************************************************************************/
 
-OGRErr OGRVRTLayer::SetNextByIndex( long nIndex )
+OGRErr OGRVRTLayer::SetNextByIndex( GIntBig nIndex )
 {
     if (!bHasFullInitialized) FullInitialize();
     if (!poSrcLayer || poDS->GetRecursionDetected()) return OGRERR_FAILURE;
@@ -1896,7 +1932,7 @@ OGRErr OGRVRTLayer::ISetFeature( OGRFeature* poVRTFeature )
 /*                           DeleteFeature()                            */
 /************************************************************************/
 
-OGRErr OGRVRTLayer::DeleteFeature( long nFID )
+OGRErr OGRVRTLayer::DeleteFeature( GIntBig nFID )
 
 {
     if (!bHasFullInitialized) FullInitialize();
@@ -2100,7 +2136,7 @@ OGRErr OGRVRTLayer::GetExtent( int iGeomField, OGREnvelope *psExtent, int bForce
 /*                          GetFeatureCount()                           */
 /************************************************************************/
 
-int OGRVRTLayer::GetFeatureCount( int bForce )
+GIntBig OGRVRTLayer::GetFeatureCount( int bForce )
 
 {
     if (nFeatureCount >= 0 &&
@@ -2204,6 +2240,9 @@ const char * OGRVRTLayer::GetFIDColumn()
 {
     if (!bHasFullInitialized) FullInitialize();
     if (!poSrcLayer || poDS->GetRecursionDetected()) return "";
+
+    if( osFIDFieldName.size() )
+        return osFIDFieldName;
 
     const char* pszFIDColumn;
     if (iFIDField == -1)

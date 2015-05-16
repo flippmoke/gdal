@@ -27,7 +27,6 @@
 # Boston, MA 02111-1307, USA.
 ###############################################################################
 
-import os
 import sys
 
 sys.path.append( '../pymod' )
@@ -240,7 +239,9 @@ def ogr_basic_7():
     feat_defn.AddFieldDefn(field_defn)
     field_defn = ogr.FieldDefn('field10', ogr.OFTBinary)
     feat_defn.AddFieldDefn(field_defn)
-
+    field_defn = ogr.FieldDefn('field11', ogr.OFTInteger64)
+    feat_defn.AddFieldDefn(field_defn)
+    
     feat = ogr.Feature(feat_defn)
     feat.SetFID(100)
     feat.SetField(0, 1)
@@ -253,11 +254,11 @@ def ogr_basic_7():
     feat.SetField(7, 2010, 1, 8, 22, 48, 15, 4)
     feat.SetField(8, 2010, 1, 8, 22, 48, 15, 4)
     feat.SetFieldBinaryFromHexString(9, '012345678ABCDEF')
+    feat.SetField(10, 1234567890123)
 
     feat_clone = feat.Clone()
     if not feat.Equal(feat_clone):
         feat.DumpReadable()
-        feat_almost_clone.DumpReadable()
         return 'fail'
 
     feat_almost_clone = feat.Clone()
@@ -365,6 +366,20 @@ def ogr_basic_7():
 
     feat_almost_clone = feat.Clone()
     feat_almost_clone.SetFieldBinaryFromHexString(9, '00')
+    if feat.Equal(feat_almost_clone):
+        feat.DumpReadable()
+        feat_almost_clone.DumpReadable()
+        return 'fail'
+
+    feat_almost_clone = feat.Clone()
+    feat_almost_clone.SetField(10, 2)
+    if feat.Equal(feat_almost_clone):
+        feat.DumpReadable()
+        feat_almost_clone.DumpReadable()
+        return 'fail'
+
+    feat_almost_clone = feat.Clone()
+    feat_almost_clone.SetField(10, 2)
     if feat.Equal(feat_almost_clone):
         feat.DumpReadable()
         feat_almost_clone.DumpReadable()

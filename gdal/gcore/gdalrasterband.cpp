@@ -125,7 +125,7 @@ GDALRasterBand::~GDALRasterBand()
  * on "block boundaries" as returned by GetBlockSize(), or use the
  * ReadBlock() and WriteBlock() methods.
  *
- * This method is the same as the C GDALRasterIO() function.
+ * This method is the same as the C GDALRasterIO() or GDALRasterIOEx() functions.
  *
  * @param eRWFlag Either GF_Read to read a region of data, or GF_Write to
  * write a region of data.
@@ -283,6 +283,9 @@ CPLErr GDALRasterBand::RasterIO( GDALRWFlag eRWFlag,
 /**
  * \brief Read/write a region of image data for this band.
  *
+ * Use GDALRasterIOEx() if 64 bit spacings or extra arguments (resampling
+ * resolution, progress callback, etc. are needed)
+ * 
  * @see GDALRasterBand::RasterIO()
  */
 
@@ -365,14 +368,14 @@ GDALRasterIOEx( GDALRasterBandH hBand, GDALRWFlag eRWFlag,
  * undermined value.
  *
 <pre>
- CPLErr GetHistogram( GDALRasterBand *poBand, int *panHistogram )
+ CPLErr GetHistogram( GDALRasterBand *poBand, GUIntBig *panHistogram )
 
  {
      int        nXBlocks, nYBlocks, nXBlockSize, nYBlockSize;
      int        iXBlock, iYBlock;
      GByte      *pabyData;
 
-     memset( panHistogram, 0, sizeof(int) * 256 );
+     memset( panHistogram, 0, sizeof(GUIntBig) * 256 );
 
      CPLAssert( poBand->GetRasterDataType() == GDT_Byte );
 
@@ -991,6 +994,80 @@ CPLErr CPL_STDCALL GDALFlushRasterCache( GDALRasterBandH hBand )
     return ((GDALRasterBand *) hBand)->FlushCache();
 }
 
+
+/************************************************************************/
+/*                        UnreferenceBlock()                            */
+/*                                                                      */
+/*      Unreference the block from our array of blocks                  */
+/*      This method should only be called by                            */
+/*      GDALRasterBlock::Internalize(), and under the block cache mutex */
+/************************************************************************/
+
+CPLErr GDALRasterBand::UnreferenceBlock( int nXBlockOff, int nYBlockOff )
+{
+
+    if( !papoBlocks )
+        return CE_None;
+    
+/* -------------------------------------------------------------------- */
+/*      Validate the request                                            */
+/* -------------------------------------------------------------------- */
+    if( nXBlockOff < 0 || nXBlockOff >= nBlocksPerRow )
+    {
+        ReportError( CE_Failure, CPLE_IllegalArg,
+                  "Illegal nBlockXOff value (%d) in "
+                        "GDALRasterBand::FlushBlock()\n",
+                  nXBlockOff );
+
+        return( CE_Failure );
+    }
+
+    if( nYBlockOff < 0 || nYBlockOff >= nBlocksPerColumn )
+    {
+        ReportError( CE_Failure, CPLE_IllegalArg,
+                  "Illegal nBlockYOff value (%d) in "
+                        "GDALRasterBand::FlushBlock()\n",
+                  nYBlockOff );
+
+        return( CE_Failure );
+    }
+
+/* -------------------------------------------------------------------- */
+/*      Simple case for single level caches.                            */
+/* -------------------------------------------------------------------- */
+    if( !bSubBlockingActive )
+    {
+        int nBlockIndex = nXBlockOff + nYBlockOff * nBlocksPerRow;
+
+        papoBlocks[nBlockIndex] = NULL;
+    }
+
+/* -------------------------------------------------------------------- */
+/*      Identify our subblock.                                          */
+/* -------------------------------------------------------------------- */
+    else
+    {
+        int nSubBlock = TO_SUBBLOCK(nXBlockOff) 
+            + TO_SUBBLOCK(nYBlockOff) * nSubBlocksPerRow;
+
+        if( papoBlocks[nSubBlock] == NULL )
+            return CE_None;
+
+/* -------------------------------------------------------------------- */
+/*      Check within subblock.                                          */
+/* -------------------------------------------------------------------- */
+        GDALRasterBlock **papoSubBlockGrid = 
+            (GDALRasterBlock **) papoBlocks[nSubBlock];
+
+        int nBlockInSubBlock = WITHIN_SUBBLOCK(nXBlockOff)
+            + WITHIN_SUBBLOCK(nYBlockOff) * SUBBLOCK_SIZE;
+
+        papoSubBlockGrid[nBlockInSubBlock] = NULL;
+    }
+
+    return CE_None;
+}
+
 /************************************************************************/
 /*                             FlushBlock()                             */
 /*                                                                      */
@@ -1001,7 +1078,8 @@ CPLErr CPL_STDCALL GDALFlushRasterCache( GDALRasterBandH hBand )
 /*      Protected method.                                               */
 /************************************************************************/
 
-CPLErr GDALRasterBand::FlushBlock( int nXBlockOff, int nYBlockOff, int bWriteDirtyBlock )
+CPLErr GDALRasterBand::FlushBlock( int nXBlockOff, int nYBlockOff,
+                                   int bWriteDirtyBlock )
 
 {
     int             nBlockIndex;
@@ -1065,7 +1143,7 @@ CPLErr GDALRasterBand::FlushBlock( int nXBlockOff, int nYBlockOff, int bWriteDir
         
         int nBlockInSubBlock = WITHIN_SUBBLOCK(nXBlockOff)
             + WITHIN_SUBBLOCK(nYBlockOff) * SUBBLOCK_SIZE;
-        
+
         GDALRasterBlock::SafeLockBlock( papoSubBlockGrid + nBlockInSubBlock );
 
         poBlock = papoSubBlockGrid[nBlockInSubBlock];
@@ -2146,7 +2224,8 @@ GDALRasterBandH CPL_STDCALL GDALGetOverview( GDALRasterBandH hBand, int i )
  * The same band as was passed in will be returned if it has not overviews,
  * or if none of the overviews have enough samples.
  *
- * This method is the same as the C function GDALGetRasterSampleOverview().
+ * This method is the same as the C functions GDALGetRasterSampleOverview()
+ * and GDALGetRasterSampleOverviewEx().
  *
  * @param nDesiredSamples the returned band will have at least this many 
  * pixels.
@@ -2154,7 +2233,7 @@ GDALRasterBandH CPL_STDCALL GDALGetOverview( GDALRasterBandH hBand, int i )
  * @return optimal overview or the band itself. 
  */
 
-GDALRasterBand *GDALRasterBand::GetRasterSampleOverview( int nDesiredSamples )
+GDALRasterBand *GDALRasterBand::GetRasterSampleOverview( GUIntBig nDesiredSamples )
 
 {
     double dfBestSamples = 0; 
@@ -2189,7 +2268,11 @@ GDALRasterBand *GDALRasterBand::GetRasterSampleOverview( int nDesiredSamples )
 /**
  * \brief Fetch best sampling overview.
  *
+ * Use GDALGetRasterSampleOverviewEx() to be able to specify more than 2
+ * billion samples.
+ *
  * @see GDALRasterBand::GetRasterSampleOverview()
+ * @see GDALGetRasterSampleOverviewEx()
  */
 
 GDALRasterBandH CPL_STDCALL 
@@ -2197,6 +2280,28 @@ GDALGetRasterSampleOverview( GDALRasterBandH hBand, int nDesiredSamples )
 
 {
     VALIDATE_POINTER1( hBand, "GDALGetRasterSampleOverview", NULL );
+
+    GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
+    return (GDALRasterBandH)
+        poBand->GetRasterSampleOverview( nDesiredSamples < 0 ? 0 : (GUIntBig)nDesiredSamples );
+}
+
+/************************************************************************/
+/*                    GDALGetRasterSampleOverviewEx()                   */
+/************************************************************************/
+
+/**
+ * \brief Fetch best sampling overview.
+ *
+ * @see GDALRasterBand::GetRasterSampleOverview()
+ * @since GDAL 2.0
+ */
+
+GDALRasterBandH CPL_STDCALL 
+GDALGetRasterSampleOverviewEx( GDALRasterBandH hBand, GUIntBig nDesiredSamples )
+
+{
+    VALIDATE_POINTER1( hBand, "GDALGetRasterSampleOverviewEx", NULL );
 
     GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
     return (GDALRasterBandH)
@@ -2711,7 +2816,7 @@ GDALDatasetH CPL_STDCALL GDALGetBandDataset( GDALRasterBandH hBand )
  * bucket boundaries don't fall right on integer values causing possible errors
  * due to rounding after scaling. 
 <pre>
-    int anHistogram[256];
+    GUIntBig anHistogram[256];
 
     poBand->GetHistogram( -0.5, 255.5, 256, anHistogram, FALSE, FALSE, 
                           GDALDummyProgress, NULL );
@@ -2723,7 +2828,8 @@ GDALDatasetH CPL_STDCALL GDALGetBandDataset( GDALRasterBandH hBand )
  * in generating histogram based luts for instance.  Generally bApproxOK is
  * much faster than an exactly computed histogram.
  *
- * This method is the same as the C function GDALGetRasterHistogram().
+ * This method is the same as the C functions GDALGetRasterHistogram() and
+ * GDALGetRasterHistogramEx().
  *
  * @param dfMin the lower bound of the histogram.
  * @param dfMax the upper bound of the histogram.
@@ -2740,7 +2846,7 @@ GDALDatasetH CPL_STDCALL GDALGetBandDataset( GDALRasterBandH hBand )
  */
 
 CPLErr GDALRasterBand::GetHistogram( double dfMin, double dfMax, 
-                                     int nBuckets, int *panHistogram, 
+                                     int nBuckets, GUIntBig *panHistogram, 
                                      int bIncludeOutOfRange, int bApproxOK,
                                      GDALProgressFunc pfnProgress, 
                                      void *pProgressData )
@@ -2783,7 +2889,7 @@ CPLErr GDALRasterBand::GetHistogram( double dfMin, double dfMax,
     INIT_RASTERIO_EXTRA_ARG(sExtraArg);
 
     const double dfScale = nBuckets / (dfMax - dfMin);
-    memset( panHistogram, 0, sizeof(int) * nBuckets );
+    memset( panHistogram, 0, sizeof(GUIntBig) * nBuckets );
 
     int bGotNoDataValue;
     const double dfNoDataValue = GetNoDataValue( &bGotNoDataValue );
@@ -3144,7 +3250,11 @@ CPLErr GDALRasterBand::GetHistogram( double dfMin, double dfMax,
 /**
  * \brief Compute raster histogram. 
  *
+ * Use GDALGetRasterHistogramEx() instead to get correct counts for values
+ * exceeding 2 billion.
+ *
  * @see GDALRasterBand::GetHistogram()
+ * @see GDALGetRasterHistogramEx()
  */
 
 CPLErr CPL_STDCALL 
@@ -3158,6 +3268,65 @@ GDALGetRasterHistogram( GDALRasterBandH hBand,
 {
     VALIDATE_POINTER1( hBand, "GDALGetRasterHistogram", CE_Failure );
     VALIDATE_POINTER1( panHistogram, "GDALGetRasterHistogram", CE_Failure );
+
+    GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
+    
+    GUIntBig* panHistogramTemp = (GUIntBig*)VSIMalloc2(sizeof(GUIntBig), nBuckets);
+    if( panHistogramTemp == NULL )
+    {
+        poBand->ReportError( CE_Failure, CPLE_OutOfMemory,
+                     "Out of memory in GDALGetRasterHistogram()." );
+        return CE_Failure;
+    }
+
+    CPLErr eErr = poBand->GetHistogram( dfMin, dfMax, nBuckets, panHistogramTemp, 
+                      bIncludeOutOfRange, bApproxOK,
+                      pfnProgress, pProgressData );
+
+    if( eErr == CE_None )
+    {
+        for(int i=0;i<nBuckets;i++)
+        {
+            if( panHistogramTemp[i] > INT_MAX )
+            {
+                CPLError(CE_Warning, CPLE_AppDefined,
+                         "Count for bucket %d, which is " CPL_FRMT_GUIB " exceeds maximum 32 bit value",
+                         i, panHistogramTemp[i]);
+                panHistogram[i] = INT_MAX;
+            }
+            else
+                panHistogram[i] = (int)panHistogramTemp[i];
+        }
+    }
+    
+    CPLFree(panHistogramTemp);
+    
+    return eErr;
+}
+
+/************************************************************************/
+/*                      GDALGetRasterHistogramEx()                      */
+/************************************************************************/
+
+/**
+ * \brief Compute raster histogram. 
+ *
+ * @see GDALRasterBand::GetHistogram()
+ *
+ * @since GDAL 2.0
+ */
+
+CPLErr CPL_STDCALL 
+GDALGetRasterHistogramEx( GDALRasterBandH hBand, 
+                        double dfMin, double dfMax, 
+                        int nBuckets, GUIntBig *panHistogram, 
+                        int bIncludeOutOfRange, int bApproxOK,
+                        GDALProgressFunc pfnProgress, 
+                        void *pProgressData )
+    
+{
+    VALIDATE_POINTER1( hBand, "GDALGetRasterHistogramEx", CE_Failure );
+    VALIDATE_POINTER1( panHistogram, "GDALGetRasterHistogramEx", CE_Failure );
 
     GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
 
@@ -3177,7 +3346,8 @@ GDALGetRasterHistogram( GDALRasterBandH hBand,
  * method is overriden by derived classes (such as GDALPamRasterBand, VRTDataset, HFADataset...)
  * that may be able to fetch efficiently an already stored histogram.
  *
- * This method is the same as the C function GDALGetDefaultHistogram().
+ * This method is the same as the C functions GDALGetDefaultHistogram() and
+ * GDALGetDefaultHistogramEx().
  *
  * @param pdfMin pointer to double value that will contain the lower bound of the histogram.
  * @param pdfMax pointer to double value that will contain the upper bound of the histogram.
@@ -3193,7 +3363,7 @@ GDALGetRasterHistogram( GDALRasterBandH hBand,
 
 CPLErr 
     GDALRasterBand::GetDefaultHistogram( double *pdfMin, double *pdfMax, 
-                                         int *pnBuckets, int **ppanHistogram, 
+                                         int *pnBuckets, GUIntBig **ppanHistogram, 
                                          int bForce,
                                          GDALProgressFunc pfnProgress, 
                                          void *pProgressData )
@@ -3234,7 +3404,7 @@ CPLErr
             return eErr;
     }
 
-    *ppanHistogram = (int *) VSICalloc(sizeof(int), nBuckets);
+    *ppanHistogram = (GUIntBig *) VSICalloc(sizeof(GUIntBig), nBuckets);
     if( *ppanHistogram == NULL )
     {
         ReportError( CE_Failure, CPLE_OutOfMemory,
@@ -3254,7 +3424,11 @@ CPLErr
 /**
   * \brief Fetch default raster histogram. 
   *
-  * @see GDALRasterBand::GetDefaultHistogram()
+  * Use GDALGetRasterHistogramEx() instead to get correct counts for values
+  * exceeding 2 billion.
+  *
+  * @see GDALRasterBand::GDALGetDefaultHistogram()
+  * @see GDALGetRasterHistogramEx()
   */
 
 CPLErr CPL_STDCALL GDALGetDefaultHistogram( GDALRasterBandH hBand, 
@@ -3272,10 +3446,72 @@ CPLErr CPL_STDCALL GDALGetDefaultHistogram( GDALRasterBandH hBand,
     VALIDATE_POINTER1( ppanHistogram, "GDALGetDefaultHistogram", CE_Failure );
 
     GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
+    GUIntBig* panHistogramTemp = NULL;
+    CPLErr eErr = poBand->GetDefaultHistogram( pdfMin, pdfMax,
+        pnBuckets, &panHistogramTemp, bForce, pfnProgress, pProgressData );
+    if( eErr == CE_None )
+    {
+        int nBuckets = *pnBuckets;
+        *ppanHistogram = (int*) VSIMalloc2(sizeof(int), nBuckets);
+        if( *ppanHistogram == NULL )
+        {
+            poBand->ReportError( CE_Failure, CPLE_OutOfMemory,
+                        "Out of memory in GDALGetDefaultHistogram()." );
+            VSIFree(panHistogramTemp);
+            return CE_Failure;
+        }
+
+        for(int i=0;i<nBuckets;i++)
+        {
+            if( panHistogramTemp[i] > INT_MAX )
+            {
+                CPLError(CE_Warning, CPLE_AppDefined,
+                         "Count for bucket %d, which is " CPL_FRMT_GUIB " exceeds maximum 32 bit value",
+                         i, panHistogramTemp[i]);
+                (*ppanHistogram)[i] = INT_MAX;
+            }
+            else
+                (*ppanHistogram)[i] = (int)panHistogramTemp[i];
+        }
+
+        CPLFree(panHistogramTemp);
+    }
+    else
+        *ppanHistogram = NULL;
+
+    return eErr;
+}
+
+/************************************************************************/
+/*                      GDALGetDefaultHistogramEx()                     */
+/************************************************************************/
+
+/**
+  * \brief Fetch default raster histogram. 
+  *
+  * @see GDALRasterBand::GetDefaultHistogram()
+  *
+  * @since GDAL 2.0
+  */
+
+CPLErr CPL_STDCALL GDALGetDefaultHistogramEx( GDALRasterBandH hBand, 
+                                double *pdfMin, double *pdfMax, 
+                                int *pnBuckets, GUIntBig **ppanHistogram, 
+                                int bForce,
+                                GDALProgressFunc pfnProgress, 
+                                void *pProgressData )
+
+{
+    VALIDATE_POINTER1( hBand, "GDALGetDefaultHistogram", CE_Failure );
+    VALIDATE_POINTER1( pdfMin, "GDALGetDefaultHistogram", CE_Failure );
+    VALIDATE_POINTER1( pdfMax, "GDALGetDefaultHistogram", CE_Failure );
+    VALIDATE_POINTER1( pnBuckets, "GDALGetDefaultHistogram", CE_Failure );
+    VALIDATE_POINTER1( ppanHistogram, "GDALGetDefaultHistogram", CE_Failure );
+
+    GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
     return poBand->GetDefaultHistogram( pdfMin, pdfMax,
         pnBuckets, ppanHistogram, bForce, pfnProgress, pProgressData );
 }
-
 /************************************************************************/
 /*                             AdviseRead()                             */
 /************************************************************************/
@@ -3370,7 +3606,7 @@ GDALRasterAdviseRead( GDALRasterBandH hBand,
  * but no warning will have been issued.   This is a non-standard use of
  * the CE_Warning return value to indicate "nothing done". 
  *
- * Note that file formats using PAM (Persistent Auxilary Metadata) services
+ * Note that file formats using PAM (Persistent Auxiliary Metadata) services
  * will generally cache statistics in the .pam file allowing fast fetch
  * after the first request. 
  *
@@ -4336,12 +4572,13 @@ GDALComputeRasterMinMax( GDALRasterBandH hBand, int bApproxOK,
 /**
  * \brief Set default histogram.
  *
- * This method is the same as the C function GDALSetDefaultHistogram().
+ * This method is the same as the C function GDALSetDefaultHistogram() and
+ * GDALSetDefaultHistogramEx()
  */
 CPLErr GDALRasterBand::SetDefaultHistogram( CPL_UNUSED double dfMin,
                                             CPL_UNUSED double dfMax,
                                             CPL_UNUSED int nBuckets,
-                                            CPL_UNUSED int *panHistogram )
+                                            CPL_UNUSED GUIntBig *panHistogram )
 
 {
     if( !(GetMOFlags() & GMO_IGNORE_UNIMPLEMENTED) )
@@ -4358,7 +4595,11 @@ CPLErr GDALRasterBand::SetDefaultHistogram( CPL_UNUSED double dfMin,
 /**
  * \brief Set default histogram.
  *
+ * Use GDALSetRasterHistogramEx() instead to be able to set counts exceeding
+ * 2 billion.
+ *
  * @see GDALRasterBand::SetDefaultHistogram()
+ * @see GDALSetRasterHistogramEx()
  */
 
 CPLErr CPL_STDCALL GDALSetDefaultHistogram( GDALRasterBandH hBand, 
@@ -4367,6 +4608,47 @@ CPLErr CPL_STDCALL GDALSetDefaultHistogram( GDALRasterBandH hBand,
 
 {
     VALIDATE_POINTER1( hBand, "GDALSetDefaultHistogram", CE_Failure );
+
+    GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
+    
+    GUIntBig* panHistogramTemp = (GUIntBig*) VSIMalloc2(sizeof(GUIntBig), nBuckets);
+    if( panHistogramTemp == NULL )
+    {
+        poBand->ReportError( CE_Failure, CPLE_OutOfMemory,
+                    "Out of memory in GDALSetDefaultHistogram()." );
+        return CE_Failure;
+    }
+
+    for(int i=0;i<nBuckets;i++)
+    {
+        panHistogramTemp[i] = (GUIntBig)panHistogram[i];
+    }
+    
+    CPLErr eErr = poBand->SetDefaultHistogram( dfMin, dfMax, nBuckets, panHistogramTemp );
+    
+    CPLFree(panHistogramTemp);
+    
+    return eErr;
+}
+
+/************************************************************************/
+/*                     GDALSetDefaultHistogramEx()                      */
+/************************************************************************/
+
+/**
+ * \brief Set default histogram.
+ *
+ * @see GDALRasterBand::SetDefaultHistogram()
+ *
+ * @since GDAL 2.0
+ */
+
+CPLErr CPL_STDCALL GDALSetDefaultHistogramEx( GDALRasterBandH hBand, 
+                                            double dfMin, double dfMax, 
+                                            int nBuckets, GUIntBig *panHistogram )
+
+{
+    VALIDATE_POINTER1( hBand, "GDALSetDefaultHistogramEx", CE_Failure );
 
     GDALRasterBand *poBand = static_cast<GDALRasterBand*>(hBand);
     return poBand->SetDefaultHistogram( dfMin, dfMax, nBuckets, panHistogram );

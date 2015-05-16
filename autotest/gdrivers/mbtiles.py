@@ -29,7 +29,6 @@
 # DEALINGS IN THE SOFTWARE.
 ###############################################################################
 
-import os
 import sys
 from osgeo import gdal
 from osgeo import ogr
@@ -99,7 +98,7 @@ def mbtiles_2():
         return 'fail'
 
     gt = ds.GetGeoTransform()
-    expected_gt = ( -20037500.0, 78271.484375, 0.0, 20037500.0, 0.0, -78271.484375 )
+    expected_gt = ( -20037508.34, 78271.516953124999, 0.0, 20037508.34, 0.0, -78271.516953124999 )
     for i in range(6):
         if abs(gt[i] - expected_gt[i]) > 1e-15:
             gdaltest.post_reason('bad gt')

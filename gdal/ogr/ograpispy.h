@@ -75,7 +75,8 @@ extern int bOGRAPISpyEnabled;
 int OGRAPISpyOpenTakeSnapshot(const char* pszName, int bUpdate);
 void OGRAPISpyOpen(const char* pszName, int bUpdate, int iSnapshot,
                    GDALDatasetH* phDS);
-void OGRAPISpyClose(OGRDataSourceH hDS);
+void OGRAPISpyPreClose(OGRDataSourceH hDS);
+void OGRAPISpyPostClose(OGRDataSourceH hDS);
 void OGRAPISpyCreateDataSource(OGRSFDriverH hDriver, const char* pszName,
                                char** papszOptions, OGRDataSourceH hDS);
 void OGRAPISpyDeleteDataSource(OGRSFDriverH hDriver, const char* pszName);
@@ -97,14 +98,18 @@ void OGRAPISpy_DS_CreateLayer( OGRDataSourceH hDS,
                                OGRwkbGeometryType eType,
                                char ** papszOptions,
                                OGRLayerH hLayer);
-void OGRAPISpy_DS_DeleteLayer( OGRDataSourceH hDS, int iLayer, OGRErr eErr );
+void OGRAPISpy_DS_DeleteLayer( OGRDataSourceH hDS, int iLayer );
+
+void OGRAPISpy_Dataset_StartTransaction( GDALDatasetH hDS, int bForce );
+void OGRAPISpy_Dataset_CommitTransaction( GDALDatasetH hDS );
+void OGRAPISpy_Dataset_RollbackTransaction( GDALDatasetH hDS );
 
 void OGRAPISpy_L_GetFeatureCount( OGRLayerH hLayer, int bForce );
 void OGRAPISpy_L_GetExtent( OGRLayerH hLayer, int bForce );
 void OGRAPISpy_L_GetExtentEx( OGRLayerH hLayer, int iGeomField, int bForce );
 void OGRAPISpy_L_SetAttributeFilter( OGRLayerH hLayer, const char* pszFilter );
-void OGRAPISpy_L_GetFeature( OGRLayerH hLayer, long nFeatureId );
-void OGRAPISpy_L_SetNextByIndex( OGRLayerH hLayer, long nIndex );
+void OGRAPISpy_L_GetFeature( OGRLayerH hLayer, GIntBig nFeatureId );
+void OGRAPISpy_L_SetNextByIndex( OGRLayerH hLayer, GIntBig nIndex );
 void OGRAPISpy_L_GetNextFeature( OGRLayerH hLayer );
 void OGRAPISpy_L_SetFeature( OGRLayerH hLayer, OGRFeatureH hFeat );
 void OGRAPISpy_L_CreateFeature( OGRLayerH hLayer, OGRFeatureH hFeat );
@@ -139,13 +144,27 @@ void OGRAPISpy_L_SetSpatialFilterRectEx( OGRLayerH hLayer, int iGeomField,
                                          double dfMaxX, double dfMaxY);
 void OGRAPISpy_L_ResetReading( OGRLayerH hLayer );
 void OGRAPISpy_L_SyncToDisk( OGRLayerH hLayer );
-void OGRAPISpy_L_DeleteFeature( OGRLayerH hLayer, long nFID );
+void OGRAPISpy_L_DeleteFeature( OGRLayerH hLayer, GIntBig nFID );
 void OGRAPISpy_L_GetFIDColumn( OGRLayerH hLayer );
 void OGRAPISpy_L_GetGeometryColumn( OGRLayerH hLayer );
 void OGRAPISpy_L_GetName( OGRLayerH hLayer );
 void OGRAPISpy_L_GetGeomType( OGRLayerH hLayer );
 void OGRAPISpy_L_SetIgnoredFields( OGRLayerH hLayer,
                                    const char** papszIgnoredFields );
+
+void OGRAPISpy_FD_GetGeomType(OGRFeatureDefnH hDefn);
+void OGRAPISpy_FD_GetFieldCount(OGRFeatureDefnH hDefn);
+void OGRAPISpy_FD_GetFieldDefn(OGRFeatureDefnH hDefn, int iField,
+                               OGRFieldDefnH hGeomField);
+void OGRAPISpy_FD_GetFieldIndex(OGRFeatureDefnH hDefn, const char* pszFieldName);
+
+void OGRAPISpy_Fld_GetXXXX(OGRFieldDefnH hField, const char* pszOp);
+
+void OGRAPISpy_FD_GetGeomFieldCount(OGRFeatureDefnH hDefn);
+void OGRAPISpy_FD_GetGeomFieldDefn(OGRFeatureDefnH hDefn, int iGeomField,
+                                   OGRGeomFieldDefnH hGeomField);
+void OGRAPISpy_FD_GetGeomFieldIndex(OGRFeatureDefnH hDefn, const char* pszFieldName);
+void OGRAPISpy_GFld_GetXXXX(OGRGeomFieldDefnH hGeomField, const char* pszOp);
 
 CPL_C_END
 

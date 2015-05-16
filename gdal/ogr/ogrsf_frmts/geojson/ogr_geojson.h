@@ -64,7 +64,7 @@ public:
     //
     OGRFeatureDefn* GetLayerDefn();
     
-    int GetFeatureCount( int bForce = TRUE );
+    GIntBig GetFeatureCount( int bForce = TRUE );
     void ResetReading();
     OGRFeature* GetNextFeature();
     int TestCapability( const char* pszCap );
@@ -178,6 +178,7 @@ public:
 
     int  GetFpOutputIsSeekable() const { return bFpOutputIsSeekable_; }
     int  GetBBOXInsertLocation() const { return nBBOXInsertLocation_; }
+    int  HasOtherPages() const { return bOtherPages_; }
 
 private:
 
@@ -186,6 +187,7 @@ private:
     //
     char* pszName_;
     char* pszGeoData_;
+    vsi_l_offset nGeoDataLen_;
     OGRLayer** papoLayers_;
     int nLayers_;
     VSILFILE* fpOut_;
@@ -195,6 +197,7 @@ private:
     // 
     GeometryTranslation flTransGeom_;
     AttributesTranslation flTransAttrs_;
+    int bOtherPages_; /* ERSI Feature Service specific */
 
     int bFpOutputIsSeekable_;
     int nBBOXInsertLocation_;
@@ -205,7 +208,7 @@ private:
     void Clear();
     int ReadFromFile( GDALOpenInfo* poOpenInfo );
     int ReadFromService( const char* pszSource );
-    void LoadLayers();
+    void LoadLayers(char** papszOpenOptions);
 };
 
 

@@ -56,11 +56,11 @@ class CPL_DLL OGRLayerDecorator : public OGRLayer
 
     virtual void        ResetReading();
     virtual OGRFeature *GetNextFeature();
-    virtual OGRErr      SetNextByIndex( long nIndex );
-    virtual OGRFeature *GetFeature( long nFID );
+    virtual OGRErr      SetNextByIndex( GIntBig nIndex );
+    virtual OGRFeature *GetFeature( GIntBig nFID );
     virtual OGRErr      ISetFeature( OGRFeature *poFeature );
     virtual OGRErr      ICreateFeature( OGRFeature *poFeature );
-    virtual OGRErr      DeleteFeature( long nFID );
+    virtual OGRErr      DeleteFeature( GIntBig nFID );
 
     virtual const char *GetName();
     virtual OGRwkbGeometryType GetGeomType();
@@ -68,7 +68,7 @@ class CPL_DLL OGRLayerDecorator : public OGRLayer
 
     virtual OGRSpatialReference *GetSpatialRef();
 
-    virtual int         GetFeatureCount( int bForce = TRUE );
+    virtual GIntBig     GetFeatureCount( int bForce = TRUE );
     virtual OGRErr      GetExtent(int iGeomField, OGREnvelope *psExtent, int bForce = TRUE);
     virtual OGRErr      GetExtent(OGREnvelope *psExtent, int bForce = TRUE);
 
@@ -95,6 +95,15 @@ class CPL_DLL OGRLayerDecorator : public OGRLayer
     virtual const char *GetGeometryColumn();
 
     virtual OGRErr      SetIgnoredFields( const char **papszFields );
+
+    virtual char      **GetMetadata( const char * pszDomain = "" );
+    virtual CPLErr      SetMetadata( char ** papszMetadata,
+                                     const char * pszDomain = "" );
+    virtual const char *GetMetadataItem( const char * pszName,
+                                         const char * pszDomain = "" );
+    virtual CPLErr      SetMetadataItem( const char * pszName,
+                                         const char * pszValue,
+                                         const char * pszDomain = "" );
 
     OGRLayer* GetBaseLayer()    { return m_poDecoratedLayer; }
 };

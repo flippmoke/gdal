@@ -35,7 +35,7 @@
 
 CPL_CVSID("$Id$");
 
-extern void *hNCMutex; /* shared with netcdf. See netcdfdataset.cpp */
+extern CPLMutex *hNCMutex; /* shared with netcdf. See netcdfdataset.cpp */
 
 /************************************************************************/
 /* ==================================================================== */
@@ -577,9 +577,9 @@ GMTCreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     nc_close (cdfid);
 
 /* -------------------------------------------------------------------- */
-/*      Re-open dataset, and copy any auxilary pam information.         */
+/*      Re-open dataset, and copy any auxiliary pam information.         */
 /* -------------------------------------------------------------------- */
-    GDALPamDataset *poDS = (GDALPamDataset *) 
+    GDALPamDataset *poDS = (GDALPamDataset *)
         GDALOpen( pszFilename, GA_ReadOnly );
 
     if( poDS )

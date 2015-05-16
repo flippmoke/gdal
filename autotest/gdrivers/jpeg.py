@@ -33,7 +33,6 @@
 import os
 import sys
 from osgeo import gdal
-import string
 import shutil
 
 sys.path.append( '../pymod' )
@@ -445,7 +444,7 @@ def jpeg_11():
 
     ds = gdal.Open('data/12bit_rose_extract.jpg')
     out_ds = gdal.GetDriverByName('JPEG').CreateCopy('tmp/jpeg11.jpg', ds)
-    out_ds = None
+    del out_ds
 
     ds = gdal.Open('tmp/jpeg11.jpg')
     if ds.GetRasterBand(1).DataType != gdal.GDT_UInt16:
@@ -630,11 +629,13 @@ def jpeg_17():
     ds = gdal.Open('data/byte_corrupted.jpg')
     gdal.PushErrorHandler('CPLQuietErrorHandler')
     # ERROR 1: libjpeg: Huffman table 0x00 was not defined
-    ds.GetRasterBand(1).Checksum()
+    cs = ds.GetRasterBand(1).Checksum()
     gdal.PopErrorHandler()
     if gdal.GetLastErrorType() != gdal.CE_Failure or gdal.GetLastErrorMsg() == '':
-        gdaltest.post_reason('fail')
-        return 'fail'
+        # libjpeg-turbo 1.4.0 doesn't emit errors...
+        if cs != 4925:
+            gdaltest.post_reason('fail')
+            return 'fail'
 
     gdal.ErrorReset()
     ds = gdal.Open('data/byte_corrupted2.jpg')
@@ -746,7 +747,7 @@ def jpeg_19():
         # Generate a JPEG file with a MSB bit mask order
         gdal.SetConfigOption('JPEG_WRITE_MASK_BIT_ORDER', 'MSB')
         out_ds = gdal.GetDriverByName('JPEG').CreateCopy('/vsimem/jpeg_19_msb.jpg', src_ds)
-        out_ds = None
+        del out_ds
         gdal.SetConfigOption('JPEG_WRITE_MASK_BIT_ORDER', None)
 
         src_ds = None

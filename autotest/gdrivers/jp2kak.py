@@ -30,7 +30,6 @@
 # DEALINGS IN THE SOFTWARE.
 ###############################################################################
 
-import os
 import sys
 from osgeo import gdal
 
@@ -101,83 +100,7 @@ def jp2kak_5():
                              options = [ 'GEOJP2=OFF' ] )
 
     return tst.testCreateCopy( check_srs = 1, check_gt = 1)
-    
-###############################################################################
-# Test reading GMLJP2 file with srsName only on the Envelope, and lots of other
-# metadata junk.  This file is also handled currently with axis reordering
-# disabled. 
 
-def jp2kak_6():
-
-    if gdaltest.jp2kak_drv is None:
-        return 'skip'
-
-    gdal.SetConfigOption( 'GDAL_IGNORE_AXIS_ORIENTATION', 'YES' )
-    
-    exp_wkt = 'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]'
-
-    ds = gdal.Open( 'data/ll.jp2' )
-    wkt = ds.GetProjection()
-
-    if wkt != exp_wkt:
-        gdaltest.post_reason( 'did not get expected WKT, should be WGS84' )
-        print('got: ', wkt)
-        print('exp: ', exp_wkt)
-        return 'fail'
-
-    gt = ds.GetGeoTransform()
-    if abs(gt[0] - 8) > 0.0000001 or abs(gt[3] - 50) > 0.000001 \
-       or abs(gt[1] - 0.000761397164) > 0.000000000005 \
-       or abs(gt[2] - 0.0) > 0.000000000005 \
-       or abs(gt[4] - 0.0) > 0.000000000005 \
-       or abs(gt[5] - -0.000761397164) > 0.000000000005:
-        gdaltest.post_reason( 'did not get expected geotransform' )
-        print('got: ', gt)
-        return 'fail'
-       
-    ds = None
-
-    gdal.SetConfigOption( 'GDAL_IGNORE_AXIS_ORIENTATION', 'NO' )
-    
-    return 'success'
-    
-###############################################################################
-# Test reading a file with axis orientation set properly for an alternate
-# axis order coordinate system (urn:...:EPSG::4326). 
-
-def jp2kak_7():
-
-    if gdaltest.jp2kak_drv is None:
-        return 'skip'
-
-    exp_wkt = 'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]'
-
-    ds = gdal.Open( 'data/gmljp2_dtedsm_epsg_4326_axes.jp2' )
-    wkt = ds.GetProjection()
-
-    if wkt != exp_wkt:
-        gdaltest.post_reason( 'did not get expected WKT, should be WGS84' )
-        print('got: ', wkt)
-        print('exp: ', exp_wkt)
-        return 'fail'
-
-    gt = ds.GetGeoTransform()
-    gte = (42.999583333333369,0.008271349862259,0,
-           34.000416666666631,0,-0.008271349862259)
-    
-    if abs(gt[0] - gte[0]) > 0.0000001 or abs(gt[3] - gte[3]) > 0.000001 \
-       or abs(gt[1] - gte[1]) > 0.000000000005 \
-       or abs(gt[2] - gte[2]) > 0.000000000005 \
-       or abs(gt[4] - gte[4]) > 0.000000000005 \
-       or abs(gt[5] - gte[5]) > 0.000000000005:
-        gdaltest.post_reason( 'did not get expected geotransform' )
-        print('got: ', gt)
-        return 'fail'
-       
-    ds = None
-
-    return 'success'
-    
 ###############################################################################
 # Test VSI*L support with a JPC rather than jp2 datastream.
 #
@@ -242,8 +165,13 @@ def jp2kak_11():
     if gdaltest.jp2kak_drv is None:
         return 'skip'
     
-    tst = gdaltest.GDALTest( 'JP2KAK', 'gtsmall_11_int16.jp2', 1, 63475 )
-    return tst.testOpen()
+    ds = gdal.Open('data/gtsmall_11_int16.jp2')
+    cs = ds.GetRasterBand(1).Checksum()
+    if cs != 63475 and cs != 63472:
+        gdaltest.post_reason('fail')
+        print(cs)
+        return 'fail'
+    return 'success'
     
 ###############################################################################
 # Test handle of 10bit unsigned file.
@@ -254,8 +182,14 @@ def jp2kak_12():
     if gdaltest.jp2kak_drv is None:
         return 'skip'
     
-    tst = gdaltest.GDALTest( 'JP2KAK', 'gtsmall_10_uint16.jp2', 1, 63360 )
-    return tst.testOpen()
+    ds = gdal.Open('data/gtsmall_10_uint16.jp2')
+    cs = ds.GetRasterBand(1).Checksum()
+    if cs != 63360 and cs != 63357:
+        gdaltest.post_reason('fail')
+        print(cs)
+        return 'fail'
+    return 'success'
+
     
 ###############################################################################
 # Test internal overviews.
@@ -286,7 +220,7 @@ def jp2kak_13():
     checksum = ov_band.Checksum()
     expected = 11776
 
-    if checksum != expected:
+    if checksum != expected and checksum != 11736:
         print(checksum)
         gdaltest.post_reason( 'did not get expected overview checksum' )
         return 'fail'
@@ -319,7 +253,7 @@ def jp2kak_14():
     checksum = ov_band.Checksum()
     expected = 12288
 
-    if checksum != expected:
+    if checksum != expected and checksum != 12272:
         print(checksum)
         gdaltest.post_reason( 'did not get expected overview checksum' )
         return 'fail'
@@ -332,7 +266,7 @@ def jp2kak_14():
     checksum = ov_band.Checksum()
     expected = 2957
 
-    if checksum != expected:
+    if checksum != expected and checksum != 2980:
         print(checksum)
         gdaltest.post_reason( 'did not get expected overview checksum (2)' )
         return 'fail'
@@ -375,7 +309,7 @@ def jp2kak_16():
 
     jp2_ds = gdal.Open( 'data/small_200ppcm.jp2' )
     out_ds = gdaltest.jp2kak_drv.CreateCopy( 'tmp/jp2kak_16.jp2', jp2_ds )
-    out_ds = None
+    del out_ds
     jp2_ds = None
 
     jp2_ds = gdal.Open( 'tmp/jp2kak_16.jp2' )
@@ -451,10 +385,60 @@ def jp2kak_19():
         return 'skip'
 
     tst = gdaltest.GDALTest( 'JP2KAK', '../gcore/data/uint16.tif', 1, 4672,
-                             options = [ 'QUALITY=100' ], absolute = 1 )
+                             options = [ 'QUALITY=100' ], filename_absolute = 1 )
 
-    return tst.testCreateCopy()
-    
+    return tst.testCreateCopy(vsimem=1)
+
+###############################################################################
+# Test auto-promotion of 1bit alpha band to 8bit
+
+def jp2kak_20():
+
+    if gdaltest.jp2kak_drv is None:
+        return 'skip'
+
+    ds = gdal.Open('data/stefan_full_rgba_alpha_1bit.jp2')
+    fourth_band = ds.GetRasterBand(4)
+    if fourth_band.GetMetadataItem('NBITS', 'IMAGE_STRUCTURE') is not None:
+        return 'fail'
+    got_cs = fourth_band.Checksum()
+    if got_cs != 8527:
+        gdaltest.post_reason('fail')
+        print(got_cs)
+        return 'fail'
+    jp2_bands_data = ds.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
+    #jp2_fourth_band_data = fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
+    fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize,int(ds.RasterXSize/16),int(ds.RasterYSize/16))
+
+    tmp_ds = gdal.GetDriverByName('GTiff').CreateCopy('/vsimem/jp2kak_20.tif', ds)
+    fourth_band = tmp_ds.GetRasterBand(4)
+    got_cs = fourth_band.Checksum()
+    gtiff_bands_data = tmp_ds.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
+    #gtiff_fourth_band_data = fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize)
+    #gtiff_fourth_band_subsampled_data = fourth_band.ReadRaster(0,0,ds.RasterXSize,ds.RasterYSize,ds.RasterXSize/16,ds.RasterYSize/16)
+    tmp_ds = None
+    gdal.GetDriverByName('GTiff').Delete('/vsimem/jp2kak_20.tif')
+    if got_cs != 8527:
+        gdaltest.post_reason('fail')
+        print(got_cs)
+        return 'fail'
+
+    if jp2_bands_data != gtiff_bands_data:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    #if jp2_fourth_band_data != gtiff_fourth_band_data:
+    #    gdaltest.post_reason('fail')
+    #    return 'fail'
+
+    ds = gdal.OpenEx('data/stefan_full_rgba_alpha_1bit.jp2', open_options = ['1BIT_ALPHA_PROMOTION=NO'])
+    fourth_band = ds.GetRasterBand(4)
+    if fourth_band.GetMetadataItem('NBITS', 'IMAGE_STRUCTURE') != '1':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success'
+
 ###############################################################################
 # Cleanup.
 
@@ -470,8 +454,6 @@ gdaltest_list = [
     jp2kak_3,
     jp2kak_4,
     jp2kak_5,
-    jp2kak_6,
-    jp2kak_7,
     jp2kak_8,
     jp2kak_9,
     jp2kak_10,
@@ -483,6 +465,8 @@ gdaltest_list = [
     jp2kak_16,
     jp2kak_17,
     jp2kak_18,
+    jp2kak_19,
+    jp2kak_20,
     jp2kak_cleanup ]
 
 if __name__ == '__main__':

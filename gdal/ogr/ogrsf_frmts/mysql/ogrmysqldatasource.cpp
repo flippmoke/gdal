@@ -109,7 +109,8 @@ void OGRMySQLDataSource::ReportError( const char *pszDescription )
 /*                                Open()                                */
 /************************************************************************/
 
-int OGRMySQLDataSource::Open( const char * pszNewName, int bUpdate )
+int OGRMySQLDataSource::Open( const char * pszNewName, char** papszOpenOptions,
+                              int bUpdate )
 
 {
     CPLAssert( nLayers == 0 );
@@ -121,10 +122,40 @@ int OGRMySQLDataSource::Open( const char * pszNewName, int bUpdate )
     char **papszTableNames=NULL;
     std::string oHost, oPassword, oUser, oDB;
 
+    CPLString osNewName(pszNewName);
+    const char* apszOpenOptions[] = { "dbname", "port", "user", "password",
+                                      "host", "tables" };
+    for(int i=0; i <(int)(sizeof(apszOpenOptions)/sizeof(char*));i++)
+    {
+        const char* pszVal = CSLFetchNameValue(papszOpenOptions, apszOpenOptions[i]);
+        if( pszVal )
+        {
+            if( osNewName[osNewName.size()-1] != ':' )
+                osNewName += ",";
+            if( i > 0 )
+            {
+                osNewName += apszOpenOptions[i];
+                osNewName += "=";
+            }
+            if( EQUAL(apszOpenOptions[i], "tables") )
+            {
+                for( ; *pszVal; ++pszVal )
+                {
+                    if( *pszVal == ',' )
+                        osNewName += ";";
+                    else
+                        osNewName += *pszVal;
+                }
+            }
+            else
+                osNewName += pszVal;
+        }
+    }
+    
 /* -------------------------------------------------------------------- */
 /*      Parse out connection information.                               */
 /* -------------------------------------------------------------------- */
-    char **papszItems = CSLTokenizeString2( pszNewName+6, ",", 
+    char **papszItems = CSLTokenizeString2( osNewName+6, ",", 
                                             CSLT_HONOURSTRINGS );
 
     if( CSLCount(papszItems) < 1 )
@@ -859,10 +890,15 @@ OGRMySQLDataSource::ICreateLayer( const char * pszLayerNameIn,
     if (!pszGeomColumnName)
         pszGeomColumnName="SHAPE";
 
-    pszExpectedFIDName = CSLFetchNameValue( papszOptions, "MYSQL_FID" );
+    pszExpectedFIDName = CSLFetchNameValue( papszOptions, "FID" );
+    if (!pszExpectedFIDName)
+        pszExpectedFIDName = CSLFetchNameValue( papszOptions, "MYSQL_FID" );
     if (!pszExpectedFIDName)
         pszExpectedFIDName="OGR_FID";
 
+    int bFID64 = CSLFetchBoolean(papszOptions, "FID64", FALSE);
+    const char* pszFIDType = bFID64 ? "BIGINT": "INT";
+    
 
     CPLDebug("MYSQL","Geometry Column Name %s.", pszGeomColumnName);
     CPLDebug("MYSQL","FID Column Name %s.", pszExpectedFIDName);
@@ -871,16 +907,16 @@ OGRMySQLDataSource::ICreateLayer( const char * pszLayerNameIn,
     {
         osCommand.Printf(
                  "CREATE TABLE `%s` ( "
-                 "   %s INT UNIQUE NOT NULL AUTO_INCREMENT )",
-                 pszLayerName, pszExpectedFIDName );
+                 "   %s %s UNIQUE NOT NULL AUTO_INCREMENT )",
+                 pszLayerName, pszExpectedFIDName, pszFIDType );
     }
     else
     {
         osCommand.Printf(
                  "CREATE TABLE `%s` ( "
-                 "   %s INT UNIQUE NOT NULL AUTO_INCREMENT, "
+                 "   %s %s UNIQUE NOT NULL AUTO_INCREMENT, "
                  "   %s GEOMETRY NOT NULL )",
-                 pszLayerName, pszExpectedFIDName, pszGeomColumnName );
+                 pszLayerName, pszExpectedFIDName, pszFIDType, pszGeomColumnName );
     }
 
     if( CSLFetchNameValue( papszOptions, "ENGINE" ) != NULL )
@@ -1037,6 +1073,8 @@ OGRMySQLDataSource::ICreateLayer( const char * pszLayerNameIn,
     eErr = poLayer->Initialize(pszLayerName);
     if (eErr == OGRERR_FAILURE)
         return NULL;
+    if( eType != wkbNone )
+        poLayer->GetLayerDefn()->GetGeomFieldDefn(0)->SetNullable(FALSE);
 
     poLayer->SetLaunderFlag( CSLFetchBoolean(papszOptions,"LAUNDER",TRUE) );
     poLayer->SetPrecisionFlag( CSLFetchBoolean(papszOptions,"PRECISION",TRUE));

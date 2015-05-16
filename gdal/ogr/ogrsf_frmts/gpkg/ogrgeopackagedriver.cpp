@@ -54,15 +54,21 @@ static int OGRGeoPackageDriverIdentify( GDALOpenInfo* poOpenInfo )
     if( poOpenInfo->fpL == NULL)
         return FALSE;
 
+    if ( poOpenInfo->nHeaderBytes < 16 ||
+        strncmp( (const char*)poOpenInfo->pabyHeader, "SQLite format 3", 15 ) != 0 )
+    {
+        return FALSE;
+    }
+
     /* Requirement 2: A GeoPackage SHALL contain 0x47503130 ("GP10" in ASCII) */
     /* in the application id */
     /* http://opengis.github.io/geopackage/#_file_format */
+    /* Be tolerant since some datasets don't actually follow that requirement */
     if( poOpenInfo->nHeaderBytes < 68 + 4 ||
         memcmp(poOpenInfo->pabyHeader + 68, aGpkgId, 4) != 0 )
     {
-        CPLError( CE_Failure, CPLE_AppDefined, "bad application_id on '%s'",
+        CPLError( CE_Warning, CPLE_AppDefined, "GPKG: bad application_id on '%s'",
                   poOpenInfo->pszFilename);
-        return FALSE;
     }
 
     return TRUE;
@@ -208,13 +214,21 @@ COMPRESSION_OPTIONS
 
         poDriver->SetMetadataItem( GDAL_DS_LAYER_CREATIONOPTIONLIST,
 "<LayerCreationOptionList>"
-"  <Option name='GEOMETRY_COLUMN' type='string' description='Name of geometry column.' default='geom'/>"
+"  <Option name='GEOMETRY_NAME' type='string' description='Name of geometry column.' default='geom' deprecated_alias='GEOMETRY_COLUMN'/>"
+"  <Option name='GEOMETRY_NULLABLE' type='boolean' description='Whether the values of the geometry column can be NULL' default='YES'/>"
 "  <Option name='FID' type='string' description='Name of the FID column to create' default='fid'/>"
 "  <Option name='OVERWRITE' type='boolean' description='Whether to overwrite an existing table with the layer name to be created' default='NO'/>"
 "  <Option name='PRECISION' type='boolean' description='Whether text fields created should keep the width' default='YES'/>"
 "  <Option name='TRUNCATE_FIELDS' type='boolean' description='Whether to truncate text content that exceeds maximum width' default='NO'/>"
 "  <Option name='SPATIAL_INDEX' type='boolean' description='Whether to create a spatial index' default='YES'/>"
+"  <Option name='IDENTIFIER' type='string' description='Identifier of the layer, as put in the contents table'/>"
+"  <Option name='DESCRIPTION' type='string' description='Description of the layer, as put in the contents table'/>"
 "</LayerCreationOptionList>");
+        
+        poDriver->SetMetadataItem( GDAL_DMD_CREATIONFIELDDATATYPES, "Integer Integer64 Real String Date DateTime Binary" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_DEFAULT_FIELDS, "YES" );
+        poDriver->SetMetadataItem( GDAL_DCAP_NOTNULL_GEOMFIELDS, "YES" );
 
         poDriver->pfnOpen = OGRGeoPackageDriverOpen;
         poDriver->pfnIdentify = OGRGeoPackageDriverIdentify;

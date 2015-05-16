@@ -539,7 +539,9 @@ CPLXMLNode *VRTRasterBand::SerializeToXML( const char *pszVRTPath )
 
     psMD = oMDMD.Serialize();
     if( psMD != NULL )
+    {
         CPLAddXMLChild( psTree, psMD );
+    }
 
     if( strlen(GetDescription()) > 0 )
         CPLSetXMLValue( psTree, "Description", GetDescription() );
@@ -790,7 +792,7 @@ GDALColorInterp VRTRasterBand::GetColorInterpretation()
 /************************************************************************/
 
 CPLErr VRTRasterBand::GetHistogram( double dfMin, double dfMax,
-                                    int nBuckets, int * panHistogram,
+                                    int nBuckets, GUIntBig * panHistogram,
                                     int bIncludeOutOfRange, int bApproxOK,
                                     GDALProgressFunc pfnProgress, 
                                     void *pProgressData )
@@ -806,13 +808,13 @@ CPLErr VRTRasterBand::GetHistogram( double dfMin, double dfMax,
                                            bIncludeOutOfRange, bApproxOK );
     if( psHistItem != NULL )
     {
-        int *panTempHist = NULL;
+        GUIntBig *panTempHist = NULL;
 
         if( PamParseHistogram( psHistItem, &dfMin, &dfMax, &nBuckets, 
                                &panTempHist,
                                &bIncludeOutOfRange, &bApproxOK ) )
         {
-            memcpy( panHistogram, panTempHist, sizeof(int) * nBuckets );
+            memcpy( panHistogram, panTempHist, sizeof(GUIntBig) * nBuckets );
             CPLFree( panTempHist );
             return CE_None;
         }
@@ -859,7 +861,7 @@ CPLErr VRTRasterBand::GetHistogram( double dfMin, double dfMax,
 /************************************************************************/
 
 CPLErr VRTRasterBand::SetDefaultHistogram( double dfMin, double dfMax, 
-                                           int nBuckets, int *panHistogram)
+                                           int nBuckets, GUIntBig *panHistogram)
 
 {
     CPLXMLNode *psNode;
@@ -909,7 +911,7 @@ CPLErr VRTRasterBand::SetDefaultHistogram( double dfMin, double dfMax,
 
 CPLErr 
 VRTRasterBand::GetDefaultHistogram( double *pdfMin, double *pdfMax, 
-                                    int *pnBuckets, int **ppanHistogram, 
+                                    int *pnBuckets, GUIntBig **ppanHistogram, 
                                     int bForce,
                                     GDALProgressFunc pfnProgress, 
                                     void *pProgressData )

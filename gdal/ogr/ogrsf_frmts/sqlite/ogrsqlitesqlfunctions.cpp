@@ -335,6 +335,9 @@ void OGR2SQLITE_ogr_geocode_set_result(sqlite3_context* pContext,
             if( eType == OFTInteger )
                 sqlite3_result_int(pContext,
                                    poFeature->GetFieldAsInteger(nIdx));
+            else if( eType == OFTInteger64 )
+                sqlite3_result_int64(pContext,
+                                   poFeature->GetFieldAsInteger64(nIdx));
             else if( eType == OFTReal )
                 sqlite3_result_double(pContext,
                                       poFeature->GetFieldAsDouble(nIdx));
@@ -427,7 +430,7 @@ static double OGR2SQLITE_GetValAsDouble(sqlite3_value* val, int* pbGotVal)
 
         case SQLITE_INTEGER:
             if( pbGotVal ) *pbGotVal = TRUE;
-            return sqlite3_value_int64(val);
+            return (double) sqlite3_value_int64(val);
 
         default:
             if( pbGotVal ) *pbGotVal = FALSE;

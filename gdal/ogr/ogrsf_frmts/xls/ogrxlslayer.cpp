@@ -210,7 +210,7 @@ OGRFeatureDefn * OGRXLSLayer::GetLayerDefn()
     if (xlshandle == NULL)
         return poFeatureDefn;
 
-    freexl_select_active_worksheet(xlshandle, iSheet);
+    freexl_select_active_worksheet(xlshandle, (unsigned short)iSheet);
 
     if (nRows > 0)
     {
@@ -264,7 +264,7 @@ OGRFeatureDefn * OGRXLSLayer::GetLayerDefn()
 /*                          GetFeatureCount()                           */
 /************************************************************************/
 
-int OGRXLSLayer::GetFeatureCount( int bForce )
+GIntBig OGRXLSLayer::GetFeatureCount( int bForce )
 {
     if  ( m_poAttrQuery == NULL /* && m_poFilterGeom == NULL */ )
     {
@@ -320,7 +320,7 @@ OGRFeature *OGRXLSLayer::GetNextRawFeature()
     if (xlshandle == NULL)
         return NULL;
 
-    freexl_select_active_worksheet(xlshandle, iSheet);
+    freexl_select_active_worksheet(xlshandle, (unsigned short)iSheet);
 
     OGRFeature* poFeature = new OGRFeature(poFeatureDefn);
 

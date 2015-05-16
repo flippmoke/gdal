@@ -31,38 +31,35 @@
 ###############################################################################
 
 try:
-    from osgeo import osr, ogr, gdal
+    from osgeo import ogr, gdal
 except ImportError:
-    import osr, ogr, gdal
+    import  ogr, gdal
 
-import string
 import sys
 
 #############################################################################
 
 def GeomType2Name( type ):
-    if type == ogr.wkbUnknown:
-        return 'wkbUnknown'
-    elif type == ogr.wkbPoint:
-        return 'wkbPoint'
-    elif type == ogr.wkbLineString:
-        return 'wkbLineString'
-    elif type == ogr.wkbPolygon:
-        return 'wkbPolygon'
-    elif type == ogr.wkbMultiPoint:
-        return 'wkbMultiPoint'
-    elif type == ogr.wkbMultiLineString:
-        return 'wkbMultiLineString'
-    elif type == ogr.wkbMultiPolygon:
-        return 'wkbMultiPolygon'
-    elif type == ogr.wkbGeometryCollection:
-        return 'wkbGeometryCollection'
-    elif type == ogr.wkbNone:
-        return 'wkbNone'
-    elif type == ogr.wkbLinearRing:
-        return 'wkbLinearRing'
-    else:
-        return 'wkbUnknown'
+    flat_type = ogr.GT_Flatten(type)
+    dic = { ogr.wkbUnknown : ('wkbUnknown', '25D'),
+            ogr.wkbPoint : ('wkbPoint', '25D'),
+            ogr.wkbLineString : ('wkbLineString', '25D'),
+            ogr.wkbPolygon : ('wkbPolygon', '25D'),
+            ogr.wkbMultiPoint : ('wkbMultiPoint', '25D'),
+            ogr.wkbMultiLineString : ('wkbMultiLineString', '25D'),
+            ogr.wkbMultiPolygon : ('wkbMultiPolygon', '25D'),
+            ogr.wkbGeometryCollection : ('wkbGeometryCollection', '25D'),
+            ogr.wkbNone : ('wkbNone', ''),
+            ogr.wkbLinearRing : ('wkbLinearRing', ''),
+            ogr.wkbCircularString : ('wkbCircularString', 'Z'),
+            ogr.wkbCompoundCurve : ('wkbCompoundCurve', 'Z'),
+            ogr.wkbCurvePolygon : ('wkbCurvePolygon', 'Z'),
+            ogr.wkbMultiCurve : ('wkbMultiCurve', 'Z'),
+            ogr.wkbMultiSurface : ('wkbMultiSurface', 'Z') }
+    ret = dic[flat_type][0]
+    if flat_type != type:
+        ret += dic[flat_type][1]
+    return ret
 
 #############################################################################
 def Esc(x):
@@ -85,6 +82,7 @@ relative = "0"
 schema=0
 feature_count=0
 extent=0
+openoptions = []
 
 argv = gdal.GeneralCmdLineProcessor( sys.argv )
 if argv is None:
@@ -105,6 +103,10 @@ while i < len(argv):
 
     elif arg == '-extent':
         extent = 1
+
+    elif arg == '-oo':
+        i += 1
+        openoptions.append(argv[i])
 
     elif arg[0] == '-':
         Usage()
@@ -134,19 +136,41 @@ if schema and extent:
 #############################################################################
 # Open the datasource to read.
 
-src_ds = ogr.Open( infile, update = 0 )
+src_ds = gdal.OpenEx( infile, gdal.OF_VECTOR, open_options = openoptions )
 
 if schema:
     infile = '@dummy@'
 
 if len(layer_list) == 0:
-    for layer in src_ds:
-        layer_list.append( layer.GetLayerDefn().GetName() )
+    for lyr_idx in range(src_ds.GetLayerCount()):
+        layer_list.append( src_ds.GetLayer(lyr_idx).GetLayerDefn().GetName() )
 
 #############################################################################
 # Start the VRT file.
 
 vrt = '<OGRVRTDataSource>\n'
+
+
+#############################################################################
+# Metadata
+
+mdd_list = src_ds.GetMetadataDomainList()
+if mdd_list is not None:
+    for domain in mdd_list:
+        if domain == '':
+            vrt += '  <Metadata>\n'
+        elif len(domain) > 4 and domain[0:4] == 'xml:':
+            vrt += '  <Metadata domain="%s" format="xml">\n' % Esc(domain)
+        else:
+            vrt += '  <Metadata domain="%s">\n' % Esc(domain)
+        if len(domain) > 4 and domain[0:4] == 'xml:':
+            vrt += src_ds.GetMetadata_List(domain)[0]
+        else:
+            md = src_ds.GetMetadata(domain)
+            for key in md:
+                vrt += '    <MDI key="%s">%s</MDI>\n' % (Esc(key), Esc(md[key]))
+        vrt += '  </Metadata>\n'
+
 
 #############################################################################
 #	Process each source layer.
@@ -156,8 +180,35 @@ for name in layer_list:
     layerdef = layer.GetLayerDefn()
 
     vrt += '  <OGRVRTLayer name="%s">\n' % Esc(name)
+
+    mdd_list = layer.GetMetadataDomainList()
+    if mdd_list is not None:
+        for domain in mdd_list:
+            if domain == '':
+                vrt += '    <Metadata>\n'
+            elif len(domain) > 4 and domain[0:4] == 'xml:':
+                vrt += '    <Metadata domain="%s" format="xml">\n' % Esc(domain)
+            else:
+                vrt += '    <Metadata domain="%s">\n' % Esc(domain)
+            if len(domain) > 4 and domain[0:4] == 'xml:':
+                vrt += layer.GetMetadata_List(domain)[0]
+            else:
+                md = layer.GetMetadata(domain)
+                for key in md:
+                    vrt += '      <MDI key="%s">%s</MDI>\n' % (Esc(key), Esc(md[key]))
+            vrt += '    </Metadata>\n'
+
+
     vrt += '    <SrcDataSource relativeToVRT="%s" shared="%d">%s</SrcDataSource>\n' \
            % (relative,not schema,Esc(infile))
+
+    if len(openoptions) > 0:
+        vrt += '    <OpenOptions>\n' 
+        for option in openoptions:
+            (key, value) = option.split('=')
+            vrt += '        <OOI key="%s">%s</OOI>\n'  % (Esc(key), Esc(value))
+        vrt += '    </OpenOptions>\n' 
+
     if schema:
         vrt += '    <SrcLayer>@dummy@</SrcLayer>\n' 
     else:
@@ -166,7 +217,8 @@ for name in layer_list:
     # Historic format for mono-geometry layers
     if layerdef.GetGeomFieldCount() == 0:
         vrt += '    <GeometryType>wkbNone</GeometryType>\n'
-    elif layerdef.GetGeomFieldCount() == 1:
+    elif layerdef.GetGeomFieldCount() == 1 and \
+         layerdef.GetGeomFieldDefn(0).IsNullable():
         vrt += '    <GeometryType>%s</GeometryType>\n' \
             % GeomType2Name(layerdef.GetGeomType())
         srs = layer.GetSpatialRef()
@@ -184,7 +236,10 @@ for name in layer_list:
     else:
         for fld_index in range(layerdef.GetGeomFieldCount()):
             src_fd = layerdef.GetGeomFieldDefn( fld_index )
-            vrt += '    <GeometryField name="%s">\n' % src_fd.GetName()
+            vrt += '    <GeometryField name="%s"' % src_fd.GetName()
+            if src_fd.IsNullable() == 0:
+                vrt += ' nullable="false"'
+            vrt += '>\n'
             vrt += '      <GeometryType>%s</GeometryType>\n' \
                     % GeomType2Name(src_fd.GetType())
             srs = src_fd.GetSpatialRef()
@@ -204,6 +259,8 @@ for name in layer_list:
         src_fd = layerdef.GetFieldDefn( fld_index )
         if src_fd.GetType() == ogr.OFTInteger:
             type = 'Integer'
+        elif src_fd.GetType() == ogr.OFTInteger64:
+            type = 'Integer64'
         elif src_fd.GetType() == ogr.OFTString:
             type = 'String'
         elif src_fd.GetType() == ogr.OFTReal:
@@ -212,6 +269,8 @@ for name in layer_list:
             type = 'StringList'
         elif src_fd.GetType() == ogr.OFTIntegerList:
             type = 'IntegerList'
+        elif src_fd.GetType() == ogr.OFTInteger64List:
+            type = 'Integer64List'
         elif src_fd.GetType() == ogr.OFTRealList:
             type = 'RealList'
         elif src_fd.GetType() == ogr.OFTBinary:
@@ -235,6 +294,8 @@ for name in layer_list:
             vrt += ' width="%d"' % src_fd.GetWidth()
         if src_fd.GetPrecision() > 0:
             vrt += ' precision="%d"' % src_fd.GetPrecision()
+        if src_fd.IsNullable() == 0:
+            vrt += ' nullable="false"'
         vrt += '/>\n'
 
     if feature_count:

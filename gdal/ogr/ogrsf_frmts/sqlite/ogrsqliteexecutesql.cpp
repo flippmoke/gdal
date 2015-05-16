@@ -741,7 +741,7 @@ OGRLayer * OGRSQLiteExecuteSQL( GDALDataset* poDS,
     static vsi_l_offset nEmptyDBSize = 0;
     static GByte* pabyEmptyDB = NULL;
     {
-        static void* hMutex = NULL;
+        static CPLMutex* hMutex = NULL;
         CPLMutexHolder oMutexHolder(&hMutex);
         static int bTried = FALSE;
         if( !bTried &&
@@ -778,7 +778,7 @@ OGRLayer * OGRSQLiteExecuteSQL( GDALDataset* poDS,
 
         poSQLiteDS = new OGRSQLiteDataSource();
         CPLSetThreadLocalConfigOption("OGR_SQLITE_STATIC_VIRTUAL_OGR", "NO");
-        nRet = poSQLiteDS->Open( pszTmpDBName, TRUE );
+        nRet = poSQLiteDS->Open( pszTmpDBName, TRUE, NULL );
         CPLSetThreadLocalConfigOption("OGR_SQLITE_STATIC_VIRTUAL_OGR", pszOldVal);
         if( !nRet )
         {

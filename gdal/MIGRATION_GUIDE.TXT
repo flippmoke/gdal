@@ -4,14 +4,20 @@ MIGRATION GUIDE FROM GDAL 1.11 to GDAL 2.0
 This file documents backwards incompatible changes. You are strongly encouraged
 to read the relevant RFCs for details and rationale for those changes.
 
+Changes to the Perl bindings API are listed in swig/perl/Changes-in-the-API-in-2.0.
+
 A) RFC 46: Unification of GDAL and OGR driver models
 
 Link: http://trac.osgeo.org/gdal/wiki/rfc46_gdal_ogr_unification
 
 C++ API:
 
+  * OGRSFDriverRegistrar and OGRSFDriver are now deprecated. Use GDALDriverManager
+    and GDALDriver instead.
+
   * The following methods from OGRSFDriverRegistrar are removed : Open(),
     OpenShared(), ReleaseDataSource(), DeregisterDriver(), AutoLoadDrivers()
+    GetDriver() and GetDriverByName() now return a GDALDriver* instance.
 
   * OGRDataSource::CreateLayer() specialized implementations should be renamed
     as ICreateLayer() to benefit from layer creation options validation.
@@ -76,6 +82,134 @@ Out-of-tree drivers :
     GDALRasterBand and GDALDataset::RasterIO() take a new
     GDALRasterIOExtraArg* psExtraArg argument
 
+D) RFC 31: OGR 64bit Integer Fields and FIDs
+
+Link:http://trac.osgeo.org/gdal/wiki/rfc31_ogr_64
+
+C++ API:
+  * OGRLayer::GetFeature(), OGRLayer::DeleteFeature(), OGRLayer::SetNextByIndex() take a GIntBig instead of a long
+  * OGRFeature::GetFID() and OGRLayer::GetFeatureCount() now returns a GIntBig
+
+C API:
+  * OGR_L_GetFeature(), OGR_L_DeleteFeature(), OGR_L_SetNextByIndex() take a GIntBig instead of a long
+  * OGR_F_GetFID() and OGR_L_GetFeatureCount() now returns a GIntBig
+
+Behaviour changes :
+  * OFTInteger64 and OFTIntegerList64 can be returned whereas OGRFieldType is returned.
+
+Out-of-tree drivers :
+  * Virtual method signature change: OGRLayer::GetFeature(), OGRLayer::DeleteFeature(),
+    OGRLayer::SetNextByIndex() take a GIntBig argument instead of a long
+  * Virtual method signature change: OGRLayer::GetFeatureCount() now returns a GIntBig
+  * OGRFeature::GetFID() returns a GIntBig
+
+E) RFC 52: Strict OGR SQL quoting
+
+Link: http://trac.osgeo.org/gdal/wiki/rfc52_strict_sql_quoting
+
+No API changes
+
+Behaviour changes:
+  * Identifiers, i.e column names or table names, can no longer be quoted with
+    single quote characters, but must use double quote characters if quoting is
+    needed, conforming with SQL 92 syntax. Failure to do the change will not
+    necessarily need to verbose errors at runtime since an expression like
+    WHERE 'a_column_name' = 'a_value' will now always evaluate to FALSE whereas
+    it would have been interpreted as WHERE "a_column_name" = 'a_value" if
+    a_column_name was indeed a column name.
+
+F) RFC 53: OGR not-null constraints and default values 
+
+Link: http://trac.osgeo.org/gdal/wiki/rfc53_ogr_notnull_default
+
+API changes:
+    * OGRFieldDefn::SetDefault() now takes a const char* as argument.
+      OGRFieldDefn::GetDefaultRef() removed and replaced by GetDefault() that
+      returns a const char*
+
+G) RFC 54: Dataset transactions
+
+Link: http://trac.osgeo.org/gdal/wiki/rfc54_dataset_transactions
+
+Only API additions.
+
+Behaviour changes:
+  * As described in the RFC, subtle behaviour changes can be observed with the PG driver,
+    related to implicit transactions that were flushed before and are no longer now,
+    but this should hopefully be restricted to non-typical use cases. So some cases that "worked" before might
+    no longer work, but the new behaviour should hopefully be more understandable.
+
+  * The PG and SQLite drivers could accept apparently nested calls to StartTransaction()
+    (at the layer level). This is no longer possible since they are now redirected
+    to dataset transactions, that explicitely do not support it.
+
+H) RFC 55: Refined SetFeature() and DeleteFeature() semantics
+
+Link: http://trac.osgeo.org/gdal/wiki/rfc55_refined_setfeature_deletefeature_semantics
+
+Behaviour changes:
+    * Drivers will now return OGRERR_NON_EXISTING_FEATURE when calling SetFeature()
+      or DeleteFeature() with a feature id that does not exist.
+
+I) RFC 56: 
+
+Link: https://trac.osgeo.org/gdal/wiki/rfc56_millisecond_precision
+
+API/ABI changes:
+
+  * OGRField.Date structure has now a Reserved field that must be set to 0 when
+    using the OGRFeature::SetField( int i, OGRField * puValue ) method.
+    The "GByte Second" field is now a "float Second".
+
+  * OGRFeature::SetField( int i, int nYear, int nMonth, int nDay,
+                          int nHour=0, int nMinute=0, float fSecond=0.f, 
+                          int nTZFlag = 0 )
+    and the variant that take a const char* as first argument now accept a
+    floating-point number for seconds.
+
+API additions :
+
+    * OGRFeature::GetFieldAsDateTime( int i, 
+                                     int *pnYear, int *pnMonth, int *pnDay,
+                                     int *pnHour, int *pnMinute, float *pfSecond, 
+                                     int *pnTZFlag );
+
+    * OGR_F_GetFieldAsDateTimeEx() and OGR_F_SetFieldDateTimeEx() are added.
+
+Driver related changes:
+
+    * The following functions, mainly used by driver implementations, have
+      seen their signature change :
+
+        int CPL_DLL OGRParseXMLDateTime( const char* pszXMLDateTime,
+                                        OGRField* psField );
+        int CPL_DLL OGRParseRFC822DateTime( const char* pszRFC822DateTime,
+                                            OGRField* psField );
+        char CPL_DLL * OGRGetRFC822DateTime(const OGRField* psField);
+        char CPL_DLL * OGRGetXMLDateTime(const OGRField* psField);
+
+Behaviour changes:
+
+    * OGRFeature::GetFieldAsString() will now output milliseconds if a DateTime/Time
+      field has such precision.
+    * Drivers will now output milliseconds if a DateTime/Time field has such precision.
+
+J) RFC 57: 64-bit bucket count for histograms
+
+Link: https://trac.osgeo.org/gdal/wiki/rfc57_histogram_64bit_count
+
+C++ API:
+  * GDALRasterBand::GetHistogram() and GDALRasterBand::SetDefaultHistogram() take a GUIntBig* instead of a int* for bucket counts.
+  * GDALRasterBand::GetDefaultHistogram() takes a GUIntBig** instead of a int** for bucket counts.
+  * GDALRasterBand::GetRasterSampleOverview() takes a GUIntBig instead of int.
+
+C API:
+  * GDALGetRasterHistogramEx(), GDALGetDefaultHistogramEx() and GDALSetDefaultHistogramEx() are added
+    and deprecate the old interfaces.
+  * GDALGetRasterSampleOverviewEx() is added.
+
+Out-of-tree drivers :
+  * See the virtual method API changes mentionned above in the C++ API paragraph.
 
 MIGRATION GUIDE FROM GDAL 1.10 to GDAL 1.11
 -------------------------------------------

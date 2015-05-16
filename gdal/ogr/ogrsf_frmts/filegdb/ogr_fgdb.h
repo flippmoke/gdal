@@ -33,7 +33,7 @@
 
 #include <vector>
 #include "ogrsf_frmts.h"
-#include "ogrmutexedlayer.h"
+#include "ogremulatedtransaction.h"
 
 /* GDAL string utilities */
 #include "cpl_string.h"
@@ -99,6 +99,8 @@ class FGdbDataSource;
 
 class FGdbLayer : public FGdbBaseLayer
 {
+  friend class FGdbDataSource;
+
   int                 m_bBulkLoadAllowed;
   int                 m_bBulkLoadInProgress;
 
@@ -115,7 +117,7 @@ class FGdbLayer : public FGdbBaseLayer
 
   std::vector<ByteArray*> m_apoByteArrays;
   OGRErr              PopulateRowWithFeature( Row& row, OGRFeature *poFeature );
-  OGRErr              GetRow( EnumRows& enumRows, Row& row, long nFID );
+  OGRErr              GetRow( EnumRows& enumRows, Row& row, GIntBig nFID );
 
   char              **m_papszOptions;
   
@@ -141,7 +143,7 @@ public:
 
   virtual void        ResetReading();
   virtual OGRFeature* GetNextFeature();
-  virtual OGRFeature* GetFeature( long nFeatureId );
+  virtual OGRFeature* GetFeature( GIntBig nFeatureId );
 
   Table* GetTable() { return m_pTable; }
 
@@ -156,10 +158,10 @@ public:
 
   virtual OGRErr      ICreateFeature( OGRFeature *poFeature );
   virtual OGRErr      ISetFeature( OGRFeature *poFeature );
-  virtual OGRErr      DeleteFeature( long nFID );
+  virtual OGRErr      DeleteFeature( GIntBig nFID );
 
   virtual OGRErr      GetExtent( OGREnvelope *psExtent, int bForce );
-  virtual int         GetFeatureCount( int bForce );
+  virtual GIntBig     GetFeatureCount( int bForce );
   virtual OGRErr      SetAttributeFilter( const char *pszQuery );
   virtual void 	      SetSpatialFilterRect (double dfMinX, double dfMinY, double dfMaxX, double dfMaxY);
   virtual void        SetSpatialFilter( OGRGeometry * );
@@ -232,14 +234,16 @@ protected:
 /*                           FGdbDataSource                            */
 /************************************************************************/
 
+class FGdbDatabaseConnection;
+
 class FGdbDataSource : public OGRDataSource
 {
 
 public:
-  FGdbDataSource(FGdbDriver* poDriver);
+  FGdbDataSource(FGdbDriver* poDriver, FGdbDatabaseConnection* pConnection);
   virtual ~FGdbDataSource();
 
-  int         Open(Geodatabase* pGeodatabase, const char *, int );
+  int         Open(const char *, int );
 
   const char* GetName() { return m_pszName; }
   int         GetLayerCount() { return static_cast<int>(m_layers.size()); }
@@ -259,6 +263,7 @@ public:
 
   Geodatabase* GetGDB() { return m_pGeodatabase; }
   bool         GetUpdate() { return m_bUpdate; }
+  FGdbDatabaseConnection* GetConnection() { return m_pConnection; }
 
   /*
   protected:
@@ -272,11 +277,11 @@ protected:
                       const std::vector<std::wstring> &layers);
 
   FGdbDriver* m_poDriver;
+  FGdbDatabaseConnection* m_pConnection;
   char* m_pszName;
-  std::vector <OGRMutexedLayer*> m_layers;
+  std::vector <FGdbLayer*> m_layers;
   Geodatabase* m_pGeodatabase;
   bool m_bUpdate;
-
 };
 
 /************************************************************************/
@@ -287,16 +292,22 @@ class FGdbDatabaseConnection
 {
 public:
     FGdbDatabaseConnection(Geodatabase* pGeodatabase) :
-        m_pGeodatabase(pGeodatabase), m_nRefCount(1) {}
+        m_pGeodatabase(pGeodatabase), m_nRefCount(1), m_bLocked(FALSE) {}
 
     Geodatabase* m_pGeodatabase;
     int          m_nRefCount;
+    int          m_bLocked;
+    
+    Geodatabase* GetGDB() { return m_pGeodatabase; }
+    void         SetLocked(int bLockedIn) { m_bLocked = bLockedIn; }
+    int          GetRefCount() const { return m_nRefCount; }
+    int          IsLocked() const { return m_bLocked; }
 };
 
-class FGdbDriver : public OGRSFDriver
+class FGdbDriver : public OGRSFDriver, public IOGRTransactionBehaviour
 {
   std::map<CPLString, FGdbDatabaseConnection*> oMapConnections;
-  void* hMutex;
+  CPLMutex* hMutex;
 
 public:
   FGdbDriver();
@@ -308,8 +319,13 @@ public:
   virtual OGRDataSource *CreateDataSource( const char *pszName, char ** = NULL);
   virtual OGRErr DeleteDataSource( const char *pszDataSource );
 
+  /* From IOGRTransactionBehaviour */
+  virtual OGRErr StartTransaction(OGRDataSource*& poDSInOut, int& bOutHasReopenedDS);
+  virtual OGRErr CommitTransaction(OGRDataSource*& poDSInOut, int& bOutHasReopenedDS);
+  virtual OGRErr RollbackTransaction(OGRDataSource*& poDSInOut, int& bOutHasReopenedDS);
+
   void Release(const char* pszName);
-  void* GetMutex() { return hMutex; }
+  CPLMutex* GetMutex() { return hMutex; }
 
 private:
 

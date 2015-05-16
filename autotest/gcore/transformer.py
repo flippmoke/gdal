@@ -30,27 +30,18 @@
 # DEALINGS IN THE SOFTWARE.
 ###############################################################################
 
-import os
 import sys
 
 sys.path.append( '../pymod' )
 
 import gdaltest
 from osgeo import gdal
-from osgeo import gdalconst
 from osgeo import osr
 
 ###############################################################################
 # Test simple Geotransform based transformer.
 
 def transformer_1():
-
-    try:
-        x = gdal.Transformer
-        gdaltest.have_ng = 1
-    except:
-        gdaltest.have_ng = 0
-        return 'skip'
 
     ds = gdal.Open('data/byte.tif')
     tr = gdal.Transformer( ds, None, [] )
@@ -82,9 +73,6 @@ def transformer_1():
 
 def transformer_2():
 
-    if not gdaltest.have_ng:
-        return 'skip'
-
     ds = gdal.Open('data/gcps.vrt')
     tr = gdal.Transformer( ds, None, [ 'METHOD=GCP_POLYNOMIAL' ] )
 
@@ -114,9 +102,6 @@ def transformer_2():
 # Test GCP based transformer with thin plate splines.
 
 def transformer_3():
-
-    if not gdaltest.have_ng:
-        return 'skip'
 
     ds = gdal.Open('data/gcps.vrt')
     tr = gdal.Transformer( ds, None, [ 'METHOD=GCP_TPS' ] )
@@ -148,9 +133,6 @@ def transformer_3():
 
 def transformer_4():
 
-    if not gdaltest.have_ng:
-        return 'skip'
-
     ds = gdal.Open('data/sstgeo.vrt')
     tr = gdal.Transformer( ds, None, [ 'METHOD=GEOLOC_ARRAY' ] )
 
@@ -180,9 +162,6 @@ def transformer_4():
 # Test RPC based transformer.
 
 def transformer_5():
-
-    if not gdaltest.have_ng:
-        return 'skip'
 
     ds = gdal.Open('data/rpc.vrt')
     tr = gdal.Transformer( ds, None, [ 'METHOD=RPC' ] )
@@ -377,9 +356,6 @@ def transformer_5():
 
 def transformer_6():
 
-    if not gdaltest.have_ng:
-        return 'skip'
-
     ds = gdal.Open('data/rpc_5395.vrt')
     tr = gdal.Transformer( ds, None, [ 'METHOD=RPC' ] )
 
@@ -400,9 +376,6 @@ def transformer_6():
 
 def transformer_7():
 
-    if not gdaltest.have_ng:
-        return 'skip'
-
     ds = gdal.Open('data/byte.tif')
     tr = gdal.Transformer( ds, None, [] )
 
@@ -422,9 +395,6 @@ def transformer_7():
 # Test handling of nodata in RPC DEM (#5680)
 
 def transformer_8():
-
-    if not gdaltest.have_ng:
-        return 'skip'
 
     ds = gdal.Open('data/rpc.vrt')
 
@@ -460,6 +430,56 @@ def transformer_8():
 
     return 'success' 
 
+###############################################################################
+# Test RPC DEM line optimization
+
+def transformer_9():
+
+    ds = gdal.Open('data/rpc.vrt')
+
+    # (long,lat)=(125.64828521533849 39.869345204440144) -> (Easting,Northing)=(213324.662167036 4418634.47813677) in EPSG:32652
+    ds_dem = gdal.GetDriverByName('GTiff').Create('/vsimem/dem.tif', 100, 100, 1, gdal.GDT_Byte)
+    sr = osr.SpatialReference()
+    sr.ImportFromEPSG(4326)
+    ds_dem.SetProjection(sr.ExportToWkt())
+    ds_dem.SetGeoTransform([125.647968621436,1.2111052640051412e-05,0,39.869926216038,0,-8.6569068979969188e-06])
+    import random
+    random.seed(0)
+    data = ''.join([ chr(40 + int(10 * random.random()) ) for i in range(100*100) ])
+    ds_dem.GetRasterBand(1).WriteRaster(0, 0, 100, 100, data)
+    ds_dem = None
+
+    for method in [ 'near', 'bilinear', 'cubic' ]:
+        tr = gdal.Transformer( ds, None, [ 'METHOD=RPC', 'RPC_DEM=/vsimem/dem.tif', 'RPC_DEMINTERPOLATION=%s' % method ] )
+
+        points = []
+        for i in range(10):
+            points.append((125.64828521533849, 39.869345204440144))
+        (pnt, success) = tr.TransformPoints( 1, points )
+        if not success[0]:
+            gdaltest.post_reason( 'failure' )
+            print(method)
+            return 'fail'
+        pnt_optimized = pnt[0]
+
+        (success,pnt) = tr.TransformPoint( 1, 125.64828521533849, 39.869345204440144, 0 )
+        if not success:
+            gdaltest.post_reason( 'failure' )
+            print(method)
+            return 'fail'
+
+        if pnt != pnt_optimized:
+            gdaltest.post_reason( 'failure' )
+            print(method)
+            print(pnt)
+            print(pnt_optimized)
+            return 'fail'
+
+   
+    gdal.Unlink('/vsimem/dem.tif')
+
+    return 'success' 
+
 gdaltest_list = [
     transformer_1,
     transformer_2,
@@ -468,7 +488,13 @@ gdaltest_list = [
     transformer_5,
     transformer_6,
     transformer_7,
-    transformer_8 ]
+    transformer_8,
+    transformer_9
+    ]
+
+disabled_gdaltest_list = [
+    transformer_9
+]
 
 if __name__ == '__main__':
 

@@ -160,10 +160,10 @@ def test_gdaltindex_3():
 
     (ret_stdout, ret_stderr) = gdaltest.runexternal_out_and_err(test_cli_utilities.get_gdaltindex_path() + ' -skip_different_projection tmp/tileindex.shp tmp/gdaltindex5.tif')
 
-    expected = 'Warning : tmp/gdaltindex5.tif is not using the same projection system as other files in the tileindex.\nThis may cause problems when using it in MapServer for example.\nUse -t_srs option to set target projection system (not supported by MapServer).'
-    if ret_stderr.find(expected) == -1:
+    if ret_stderr.find('Warning : tmp/gdaltindex5.tif is not using the same projection system as other files in the tileindex.') == -1 or \
+       ret_stderr.find('Use -t_srs option to set target projection system (not supported by MapServer).') == -1:
         print(ret_stderr)
-        gdaltest.post_reason( 'got unexpected error message \n[%s]\nexpecting\n[%s]' % (ret_stderr,expected))
+        gdaltest.post_reason( 'got unexpected error message \n[%s]' % (ret_stderr))
         return 'fail'
 
     ds = ogr.Open('tmp/tileindex.shp')
@@ -207,7 +207,6 @@ def test_gdaltindex_5():
         return 'skip'
 
     drv = gdal.GetDriverByName('GTiff')
-    wkt = 'GEOGCS[\"WGS 72\",DATUM[\"WGS_1972\"]]'
 
     ds = drv.Create('tmp/gdaltindex6.tif', 10, 10, 1)
     sr = osr.SpatialReference()

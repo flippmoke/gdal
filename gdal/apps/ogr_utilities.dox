@@ -27,6 +27,8 @@ ogrinfo [--help-general] [-ro] [-q] [-where restricted_where]
         [-spat xmin ymin xmax ymax] [-geomfield field] [-fid fid]
         [-sql statement] [-dialect dialect] [-al] [-so] [-fields={YES/NO}]
         [-geom={YES/NO/SUMMARY}] [-formats] [[-oo NAME=VALUE] ...]
+        [-nomd] [-listmdd] [-mdd domain|`all`]*
+        [-nocount] [-noextent]
         datasource_name [layer [layer ...]]
 
 \endverbatim
@@ -68,6 +70,13 @@ the feature dump will not display the geometry. If set to SUMMARY, only a
 summary of the geometry will be displayed. If set to YES, the geometry will be reported in full OGC WKT format.
 Default value is YES.</dd>
 <dt> <b>-oo</b> <em>NAME=VALUE</em>:</dt><dd>(starting with GDAL 2.0) Dataset open option (format specific)</dd>
+<dt> <b>-nomd</b></dt><dd>(starting with GDAL 2.0)  Suppress metadata printing. Some datasets may contain a lot
+of metadata strings.</dd>
+<dt> <b>-listmdd</b></dt><dd>(starting with GDAL 2.0)  List all metadata domains available for the dataset.</dd>
+<dt> <b>-mdd domain</b></dt><dd>(starting with GDAL 2.0)  Report metadata for the specified domain.
+"all" can be used to report metadata in all domains</dd>
+<dt> <b>-nocount</b></dt><dd>(starting with GDAL 2.0)  Suppress feature count printing.</dd>
+<dt> <b>-noextent</b></dt><dd>(starting with GDAL 2.0)  Suppress spatial extent printing.</dd>
 <dt> <b>--formats</b>:</dt><dd> List the format drivers that are
 enabled.</dd>
 <dt> <i>datasource_name</i>:</dt><dd> The data source to open.  May be a filename, 
@@ -194,12 +203,15 @@ Advanced options :
                [-clipdstwhere expression]
                [-wrapdateline] [-datelineoffset val]
                [[-simplify tolerance] | [-segmentize max_dist]]
-               [-addfields]
+               [-addfields] [-unsetFid]
+               [-relaxedFieldNameMatch] [-forceNullable] [-unsetDefault]
                [-fieldTypeToString All|(type1[,type2]*)] [-unsetFieldWidth]
+               [-mapFieldType type1|All=type2[,type3=type4]*]
                [-fieldmap identity | index1[,index2]*]
                [-splitlistfields] [-maxsubfields val]
                [-explodecollections] [-zfield field_name]
                [-gcp pixel line easting northing [elevation]]* [-order n | -tps]
+               [-nomd] [-mo \"META-TAG=VALUE\"]*
 
 \endverbatim
 
@@ -264,7 +276,11 @@ to the coordinate dimension declared by the layer.
 <dt> <b>-a_srs</b><em> srs_def</em>:</dt><dd> Assign an output SRS</dd>
 <dt> <b>-t_srs</b><em> srs_def</em>:</dt><dd> Reproject/transform to this SRS on output</dd>
 <dt> <b>-s_srs</b><em> srs_def</em>:</dt><dd> Override source SRS</dd>
-<dt> <b>-preserve_fid</b>:</dt><dd>Use the FID of the source features instead of letting the output driver to automatically assign a new one.</dd>
+<dt> <b>-preserve_fid</b>:</dt><dd>Use the FID of the source features instead of letting the output driver to automatically assign a new one.
+Note: starting with GDAL 2.0, if not in append mode, this behaviour becomes the default if the output driver
+has a FID layer creation option. In which case the name of the source FID column will
+be used and source feature IDs will be attempted to be preserved. This behaviour
+can be disabled by setting -unsetFid</dd>
 <dt> <b>-fid</b> <i>fid</i>:</dt><dd> If provided, only the feature with this feature
 id will be reported.  Operates exclusive of the spatial or attribute 
 queries.  Note: if you want to select several features based on their feature id, you can
@@ -281,7 +297,12 @@ Advanced options :
 <dt> <b>-oo</b> <em>NAME=VALUE</em>:</dt><dd>(starting with GDAL 2.0) Input dataset open option (format specific)</dd>
 <dt> <b>-doo</b> <em>NAME=VALUE</em>:</dt><dd>(starting with GDAL 2.0) Destination dataset open option (format specific), only valid in -update mode</dd>
 <dt> <b>-gt</b> <em>n</em>:</dt><dd> group <em>n</em> features per transaction (default 20000 in OGR 1.11, 200 in previous releases). Increase the value
-for better performance when writing into DBMS drivers that have transaction support.</dd>
+for better performance when writing into DBMS drivers that have transaction support. Starting with GDAL 2.0,
+n can be set to unlimited to load the data into a single transaction.</dd>
+<dt> <b>-ds_transaction</b>:</dt><dd>(starting with GDAL 2.0) Force the use of
+a dataset level transaction (for drivers that support such mechanism),
+especially for drivers such as FileGDB that only support dataset level transaction
+in emulation mode.</dd>
 <dt> <b>-clipsrc</b><em> [xmin ymin xmax ymax]|WKT|datasource|spat_extent</em>:
 </dt><dd> (starting with GDAL 1.7.0) clip geometries to the specified bounding
 box (expressed in source SRS), WKT geometry (POLYGON or MULTIPOLYGON), from a
@@ -305,9 +326,18 @@ Note: the algorithm used preserves topology per feature, in particular for polyg
 <dt> <b>-segmentize</b><em> max_dist</em>:</dt><dd> (starting with GDAL 1.6.0) maximum distance between 2 nodes.
 Used to create intermediate points</dd>
 <dt> <b>-fieldTypeToString</b><em> type1, ...</em>:</dt><dd> (starting with GDAL 1.7.0) converts any field of the
-specified type to a field of type string in the destination layer. Valid types are : Integer, Real, String, Date, Time,
-DateTime, Binary, IntegerList, RealList, StringList. Special value <b>All</b> can be used to convert all fields to strings.
-This is an alternate way to using the CAST operator of OGR SQL, that may avoid typing a long SQL query.</dd>
+specified type to a field of type string in the destination layer. Valid types are : Integer, Integer64, Real, String, Date, Time,
+DateTime, Binary, IntegerList, Integer64List, RealList, StringList. Special value <b>All</b> can be used to convert all fields to strings.
+This is an alternate way to using the CAST operator of OGR SQL, that may avoid typing a long SQL query.
+Note that this does not influence the field types used by the source driver, and is only an afterwards conversion.</dd>
+<dt> <b>-mapFieldType</b><em> srctype|All=dsttype, ...</em>:</dt><dd> (starting with GDAL 2.0) converts any field of the
+specified type to another type. Valid types are : Integer, Integer64, Real, String, Date, Time,
+DateTime, Binary, IntegerList, Integer64List, RealList, StringList. Types can also include subtype
+between parenthesis, such as Integer(Boolean), Real(Float32), ...
+Special value <b>All</b> can be used to convert all fields to another type.
+This is an alternate way to using the CAST operator of OGR SQL, that may avoid typing a long SQL query. This is
+a generalization of -fieldTypeToString.
+Note that this does not influence the field types used by the source driver, and is only an afterwards conversion.</dd>
 <dt> <b>-unsetFieldWidth</b>:</dt><dd> (starting with GDAL 1.11) set field width and precision to 0.</dd>
 <dt> <b>-splitlistfields</b>:</dt><dd>(starting with GDAL 1.8.0) split fields of type StringList, RealList or IntegerList into as many fields of type String, Real or Integer as necessary.</dd>
 <dt> <b>-maxsubfields</b> <em>val</em>:</dt><dd>To be combined with -splitlistfields to limit the number of subfields created for each split field.</dd>
@@ -332,6 +362,23 @@ This setting should be used along with the -append setting.</dd>
 the new fields found in source layers. This option is useful when merging files that have non-strictly
 identical structures.
 This might not work for output formats that don't support adding fields to existing non-empty layers.</dd>
+<dt> <b>-relaxedFieldNameMatch</b>:</dt><dd>(starting with GDAL 1.11) Do field name matching between
+source and existing target layer in a more relaxed way if the target driver has an implementation for it.</dd>
+[-relaxedFieldNameMatch] [-forceNullable]
+<dt> <b>-forceNullable</b>:</dt><dd>(starting with GDAL 2.0) Do not propagate not-nullable constraints
+to target layer if they exist in source layer..</dd>
+<dt> <b>-unsetDefault</b>:</dt><dd>(starting with GDAL 2.0) Do not propagate default field values
+to target layer if they exist in source layer..</dd>
+<dt> <b>-unsetFid</b>:</dt><dd>(starting with GDAL 2.0) Can be specify to prevent
+the new default behaviour that consists in, if the output driver
+has a FID layer creation option and we are not in append mode, to preserve the
+name of the source FID column and source feature IDs</dd>
+<dt> <b>-nomd</b>:</dt><dd>(starting with GDAL 2.0) To disable copying of metadata
+from source dataset and layers into target dataset and layers, when supported by
+output driver.</dd>
+<dt> <b>-mo</b> <i>"META-TAG=VALUE"</i>:</dt><dd>(starting with GDAL 2.0)  Passes a metadata key and
+value to set on the output dataset, when supported by output driver.</dd>
+
 </dl>
 
 \section ogr2ogr_performance PERFORMANCE HINTS
@@ -406,7 +453,7 @@ to layers using the OGR connection type.
 
 <dl>
 <dt><b>-lnum</b> <em>n</em>:</dt><dd> Add layer number 'n' from each source
-		file in the tile index.</dd>
+        file in the tile index.</dd>
 <dt><b>-lname</b> <em>name</em>:</dt><dd> Add the layer named 'name' from each source file
         in the tile index.</dd>
 <dt><b>-f</b> <em>output_format</em>:</dt><dd> Select an output format name.  The default
@@ -416,6 +463,10 @@ to layers using the OGR connection type.
 <dt><b>-write_absolute_path</b>:</dt><dd> Filenames are written with absolute paths</dd>
 <dt><b>-skip_different_projection</b>:</dt><dd> Only layers with same projection ref
         as layers already inserted in the tileindex will be inserted.</dd>
+<dt><b>-accept_different_schemas</b>:</dt><dd> By default ogrtindex checks that all 
+        layers inserted into the index have the same attribute schemas. If you specify
+        this option, this test will be disabled. Be aware that resulting index may be 
+        incompatible with MapServer!</dd>
 </dl>
 
 If no -lnum or -lname arguments are given it is assumed that

@@ -73,7 +73,7 @@
 
 #if ECWSDK_VERSION < 40
 
-#if !defined(NO_COMPRESS)
+#if !defined(NO_COMPRESS) && !defined(HAVE_COMPRESS)
 #  define HAVE_COMPRESS
 #endif
 
@@ -414,7 +414,7 @@ class ECWAsyncReader : public GDALAsyncReader
 {
 private:
     CNCSJP2FileView *poFileView;
-    void            *hMutex;
+    CPLMutex        *hMutex;
     int              bUsingCustomStream;
 
     int              bUpdateReady;
@@ -647,7 +647,7 @@ class ECWRasterBand : public GDALPamRasterBand
 
   public:
 
-                   ECWRasterBand( ECWDataset *, int, int = -1 );
+                   ECWRasterBand( ECWDataset *, int, int iOverview, char** papszOpenOptions );
                    ~ECWRasterBand();
 
     virtual CPLErr IReadBlock( int, int, void * );
@@ -664,11 +664,11 @@ class ECWRasterBand : public GDALPamRasterBand
 #if ECWSDK_VERSION >= 50
     void GetBandIndexAndCountForStatistics(int &bandIndex, int &bandCount);
     virtual CPLErr GetDefaultHistogram( double *pdfMin, double *pdfMax,
-                                    int *pnBuckets, int ** ppanHistogram,
+                                    int *pnBuckets, GUIntBig ** ppanHistogram,
                                     int bForce,
                                     GDALProgressFunc, void *pProgressData);
     virtual CPLErr SetDefaultHistogram( double dfMin, double dfMax,
-                                        int nBuckets, int *panHistogram );
+                                        int nBuckets, GUIntBig *panHistogram );
     virtual double GetMinimum( int* pbSuccess );
     virtual double GetMaximum( int* pbSuccess );
     virtual CPLErr GetStatistics( int bApproxOK, int bForce,

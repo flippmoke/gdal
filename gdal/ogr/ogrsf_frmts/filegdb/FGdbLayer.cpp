@@ -372,6 +372,10 @@ OGRErr FGdbLayer::ICreateFeature( OGRFeature *poFeature )
         return OGRERR_FAILURE;
     }
 
+    /* As we have issues with fixed values for dates, or CURRENT_xxxx isn't */
+    /* handled anyway, let's fill ourselves all unset fields with their default */
+    poFeature->FillUnsetWithDefault(FALSE, NULL);
+
     /* Populate the row with the feature content */
     if (PopulateRowWithFeature(fgdb_row, poFeature) != OGRERR_NONE)
         return OGRERR_FAILURE;
@@ -435,10 +439,14 @@ OGRErr FGdbLayer::PopulateRowWithFeature( Row& fgdb_row, OGRFeature *poFeature )
     {
         std::string field_name = poFeatureDefn->GetFieldDefn(i)->GetNameRef();
         std::wstring wfield_name = StringToWString(field_name);
+        const std::string & strFieldType = m_vOGRFieldToESRIFieldType[i];
 
         /* Set empty fields to NULL */
         if( !poFeature->IsFieldSet( i ) )
         {
+            if( strFieldType == "esriFieldTypeGlobalID" )
+                continue;
+
             if (FAILED(hr = fgdb_row.SetNull(wfield_name)))
             {
                 GDBErr(hr, "Failed setting field to NULL.");
@@ -449,7 +457,6 @@ OGRErr FGdbLayer::PopulateRowWithFeature( Row& fgdb_row, OGRFeature *poFeature )
 
         /* Set the information using the appropriate FGDB function */
         int nOGRFieldType = poFeatureDefn->GetFieldDefn(i)->GetType();
-        const std::string & strFieldType = m_vOGRFieldToESRIFieldType[i];
 
         if ( nOGRFieldType == OFTInteger )
         {
@@ -477,7 +484,7 @@ OGRErr FGdbLayer::PopulateRowWithFeature( Row& fgdb_row, OGRFeature *poFeature )
                 hr = fgdb_row.SetShort(wfield_name, (short) fldvalue);
             }
         }
-        else if ( nOGRFieldType == OFTReal )
+        else if ( nOGRFieldType == OFTReal || nOGRFieldType == OFTInteger64 )
         {
             /* Doubles (we don't handle FGDB Floats) */
             double fldvalue = poFeature->GetFieldAsDouble(i);
@@ -628,12 +635,18 @@ OGRErr FGdbLayer::PopulateRowWithFeature( Row& fgdb_row, OGRFeature *poFeature )
 /*                             GetRow()                                 */
 /************************************************************************/
 
-OGRErr FGdbLayer::GetRow( EnumRows& enumRows, Row& row, long nFID )
+OGRErr FGdbLayer::GetRow( EnumRows& enumRows, Row& row, GIntBig nFID )
 {
     long           hr;
     CPLString      osQuery;
+    
+    /* Querying a 64bit FID causes a runtime exception in FileGDB... */
+    if( (GIntBig)(int)nFID != nFID )
+    {
+        return OGRERR_FAILURE;
+    }
 
-    osQuery.Printf("%s = %ld", m_strOIDFieldName.c_str(), nFID);
+    osQuery.Printf("%s = " CPL_FRMT_GIB, m_strOIDFieldName.c_str(), nFID);
 
     if (FAILED(hr = m_pTable->Search(m_wstrSubfields, StringToWString(osQuery.c_str()), true, enumRows)))
     {
@@ -648,7 +661,7 @@ OGRErr FGdbLayer::GetRow( EnumRows& enumRows, Row& row, long nFID )
     }
 
     if (hr != S_OK)
-        return OGRERR_FAILURE; //none found - but no failure
+        return OGRERR_NON_EXISTING_FEATURE; //none found - but no failure
 
     return OGRERR_NONE;
 }
@@ -657,7 +670,7 @@ OGRErr FGdbLayer::GetRow( EnumRows& enumRows, Row& row, long nFID )
 /*                           DeleteFeature()                            */
 /************************************************************************/
 
-OGRErr FGdbLayer::DeleteFeature( long nFID )
+OGRErr FGdbLayer::DeleteFeature( GIntBig nFID )
 
 {
     long           hr;
@@ -669,8 +682,9 @@ OGRErr FGdbLayer::DeleteFeature( long nFID )
 
     EndBulkLoad();
 
-    if (GetRow(enumRows, row, nFID) != OGRERR_NONE)
-        return OGRERR_FAILURE;
+    OGRErr eErr = GetRow(enumRows, row, nFID);
+    if( eErr != OGRERR_NONE)
+        return eErr;
 
     if (FAILED(hr = m_pTable->Delete(row)))
     {
@@ -704,8 +718,9 @@ OGRErr FGdbLayer::ISetFeature( OGRFeature* poFeature )
 
     EndBulkLoad();
 
-    if (GetRow(enumRows, row, poFeature->GetFID()) != OGRERR_NONE)
-        return OGRERR_FAILURE;
+    OGRErr eErr = GetRow(enumRows, row, poFeature->GetFID());
+    if( eErr != OGRERR_NONE)
+        return eErr;
 
     /* Populate the row with the feature content */
     if (PopulateRowWithFeature(row, poFeature) != OGRERR_NONE)
@@ -731,13 +746,20 @@ char* FGdbLayer::CreateFieldDefn(OGRFieldDefn& oField,
 {
     std::string fieldname = oField.GetNameRef();
     std::string fidname = std::string(GetFIDColumn());
-    std::string nullable = "true";
+    std::string nullable = (oField.IsNullable()) ? "true" : "false";
 
     /* Try to map the OGR type to an ESRI type */
     OGRFieldType fldtype = oField.GetType();
     if ( ! OGRToGDBFieldType(fldtype, oField.GetSubType(), &gdbFieldType) )
     {
         GDBErr(-1, "Failed converting field type.");
+        return NULL;
+    }
+    
+    if( oField.GetType() == OFTInteger64 && !bApproxOK )
+    {
+        CPLError(CE_Failure, CPLE_AppDefined,
+                 "Integer64 not supported in FileGDB");
         return NULL;
     }
 
@@ -852,7 +874,53 @@ char* FGdbLayer::CreateFieldDefn(OGRFieldDefn& oField,
         CPLCreateXMLElementAndValue(defn_xml, "AliasName", fieldname.c_str());
     }
 
-    /* Default values are discouraged in OGR API docs */
+    if( oField.GetDefault() != NULL )
+    {
+        const char* pszDefault = oField.GetDefault();
+        /*int nYear, nMonth, nDay, nHour, nMinute;
+        float fSecond;*/
+        if( oField.GetType() == OFTString )
+        {
+            CPLString osVal = pszDefault;
+            if( osVal[0] == '\'' && osVal[osVal.size()-1] == '\'' )
+            {
+                osVal = osVal.substr(1);
+                osVal.resize(osVal.size()-1);
+                char* pszTmp = CPLUnescapeString(osVal, NULL, CPLES_SQL);
+                osVal = pszTmp;
+                CPLFree(pszTmp);
+            }
+            CPLXMLNode* psDefaultValue =
+                CPLCreateXMLElementAndValue(defn_xml, "DefaultValue", osVal);
+            FGDB_CPLAddXMLAttribute(psDefaultValue, "xsi:type", "xs:string");
+        }
+        else if( oField.GetType() == OFTInteger &&
+                 !EQUAL(gdbFieldType.c_str(), "esriFieldTypeSmallInteger") &&
+                 CPLGetValueType(pszDefault) == CPL_VALUE_INTEGER )
+        {
+            CPLXMLNode* psDefaultValue =
+                CPLCreateXMLElementAndValue(defn_xml, "DefaultValue", pszDefault);
+            FGDB_CPLAddXMLAttribute(psDefaultValue, "xsi:type", "xs:int");
+        }
+        else if( oField.GetType() == OFTReal &&
+                 !EQUAL(gdbFieldType.c_str(), "esriFieldTypeSingle") &&
+                 CPLGetValueType(pszDefault) != CPL_VALUE_STRING )
+        {
+            CPLXMLNode* psDefaultValue =
+                CPLCreateXMLElementAndValue(defn_xml, "DefaultValue", pszDefault);
+            FGDB_CPLAddXMLAttribute(psDefaultValue, "xsi:type", "xs:double");
+        }
+        /*else if( oField.GetType() == OFTDateTime &&
+                 sscanf(pszDefault, "'%d/%d/%d %d:%d:%f'", &nYear, &nMonth, &nDay,
+                        &nHour, &nMinute, &fSecond) == 6 )
+        {
+            CPLXMLNode* psDefaultValue =
+                CPLCreateXMLElementAndValue(defn_xml, "DefaultValue",
+                    CPLSPrintf("%04d-%02d-%02dT%02d:%02d:%02d",
+                               nYear, nMonth, nDay, nHour, nMinute, (int)(fSecond + 0.5)));
+            FGDB_CPLAddXMLAttribute(psDefaultValue, "xsi:type", "xs:dateTime");
+        }*/
+    }
     /* <DefaultValue xsi:type="xs:string">afternoon</DefaultValue> */
 
     /* Convert our XML tree into a string for FGDB */
@@ -1321,7 +1389,7 @@ bool FGdbLayer::CreateFeatureDataset(FGdbDataSource* pParentDataSource,
 /* Layer creation options:                                              */
 /*   FEATURE_DATASET, nest layer inside a FeatureDataset folder         */
 /*   GEOMETRY_NAME, user-selected name for the geometry column          */
-/*   OID_NAME, user-selected name for the FID column                    */
+/*   FID/OID_NAME, user-selected name for the FID column                */
 /*   XORIGIN, YORIGIN, ZORIGIN, origin of the snapping grid             */
 /*   XYSCALE, ZSCALE, inverse resolution of the snapping grid           */
 /*   XYTOLERANCE, ZTOLERANCE, snapping tolerance for topology/networks  */
@@ -1417,7 +1485,9 @@ bool FGdbLayer::Create(FGdbDataSource* pParentDataSource,
         geometry_name = CSLFetchNameValue( papszOptions, "GEOMETRY_NAME");
 
     /* Over-ride the OID name if necessary */
-    if ( CSLFetchNameValue( papszOptions, "OID_NAME") != NULL )
+    if ( CSLFetchNameValue( papszOptions, "FID") != NULL )
+        fid_name = CSLFetchNameValue( papszOptions, "FID");
+    else if ( CSLFetchNameValue( papszOptions, "OID_NAME") != NULL )
         fid_name = CSLFetchNameValue( papszOptions, "OID_NAME");
 
     /* Figure out our geometry type */
@@ -1490,7 +1560,10 @@ bool FGdbLayer::Create(FGdbDataSource* pParentDataSource,
         FGDB_CPLAddXMLAttribute(shape_xml, "xsi:type", "esri:Field");
         CPLCreateXMLElementAndValue(shape_xml, "Name", geometry_name.c_str());
         CPLCreateXMLElementAndValue(shape_xml, "Type", "esriFieldTypeGeometry");
-        CPLCreateXMLElementAndValue(shape_xml, "IsNullable", "true");
+        if( CSLFetchBoolean( papszOptions, "GEOMETRY_NULLABLE", TRUE) )
+            CPLCreateXMLElementAndValue(shape_xml, "IsNullable", "true");
+        else
+            CPLCreateXMLElementAndValue(shape_xml, "IsNullable", "false");
         CPLCreateXMLElementAndValue(shape_xml, "Length", "0");
         CPLCreateXMLElementAndValue(shape_xml, "Precision", "0");
         CPLCreateXMLElementAndValue(shape_xml, "Scale", "0");
@@ -1603,6 +1676,9 @@ bool FGdbLayer::Create(FGdbDataSource* pParentDataSource,
 
     m_papszOptions = CSLDuplicate(papszOptions);
     m_bCreateMultipatch = CSLTestBoolean(CSLFetchNameValueDef(m_papszOptions, "CREATE_MULTIPATCH", "NO"));
+    
+    // Default to YES here assuming ogr2ogr scenario
+    m_bBulkLoadAllowed = CSLTestBoolean(CPLGetConfigOption("FGDB_BULK_LOAD", "YES"));
 
     /* Store the new FGDB Table pointer and set up the OGRFeatureDefn */
     return FGdbLayer::Initialize(pParentDataSource, table, wtable_path, L"Table");
@@ -1815,7 +1891,7 @@ bool FGdbLayer::ParseGeometryDef(CPLXMLNode* psRoot)
             }
             else
             {
-                CPLDebug("OpenFileGDB", "Cannot import SRID %s", wkid.c_str());
+                CPLDebug("FGDB", "Cannot import SRID %s", wkid.c_str());
             }
         }
         CPLPopErrorHandler();
@@ -1852,10 +1928,12 @@ bool FGdbLayer::ParseGeometryDef(CPLXMLNode* psRoot)
 /************************************************************************/
 
 bool FGdbLayer::ParseSpatialReference(CPLXMLNode* psSpatialRefNode,
-                                      string* pOutWkt, string* pOutWKID, string* pOutLatestWKID)
+                                      string* pOutWkt, string* pOutWKID,
+                                      string* pOutLatestWKID)
 {
     *pOutWkt = "";
     *pOutWKID = "";
+    *pOutLatestWKID = "";
 
     CPLXMLNode* psSRItemNode;
 
@@ -1872,6 +1950,10 @@ bool FGdbLayer::ParseSpatialReference(CPLXMLNode* psSpatialRefNode,
             char* pszUnescaped = CPLUnescapeString(psSRItemNode->psChild->pszValue, NULL, CPLES_XML);
             *pOutWKID = pszUnescaped;
             CPLFree(pszUnescaped);
+
+            // Needed with FileGDB v1.4 with layers with empty SRS
+            if( *pOutWKID == "0" )
+                *pOutWKID = "";
         }
         /* The concept of LatestWKID is explained in http://resources.arcgis.com/en/help/arcgis-rest-api/index.html#//02r3000000n1000000 */
         else if( psSRItemNode->eType == CXT_Element &&
@@ -1916,6 +1998,7 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
     //CPLAssert(ogrToESRIFieldMapping.size() == pOGRFeatureDef->GetFieldCount());
 
     CPLXMLNode* psFieldNode;
+    int bShouldQueryOpenFileGDB = FALSE;
 
     for( psFieldNode = psRoot->psChild;
         psFieldNode != NULL;
@@ -1933,6 +2016,8 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
             std::string fieldType;
             int nLength = 0;
             int nPrecision = 0;
+            int bNullable = TRUE;
+            std::string osDefault;
 
             // loop through all items in Field element
             //
@@ -1943,34 +2028,41 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
             {
                 if (psFieldItemNode->eType == CXT_Element)
                 {
-
-                if (EQUAL(psFieldItemNode->pszValue,"Name"))
-                {
-                    char* pszUnescaped = CPLUnescapeString(
-                        psFieldItemNode->psChild->pszValue, NULL, CPLES_XML);
-                    fieldName = pszUnescaped;
-                    CPLFree(pszUnescaped);
-                }
-                else if (EQUAL(psFieldItemNode->pszValue,"Type") )
-                {
-                    char* pszUnescaped = CPLUnescapeString(
-                        psFieldItemNode->psChild->pszValue, NULL, CPLES_XML);
-                    fieldType = pszUnescaped;
-                    CPLFree(pszUnescaped);
-                }
-                else if (EQUAL(psFieldItemNode->pszValue,"GeometryDef") )
-                {
-                    if (!ParseGeometryDef(psFieldItemNode))
-                        return false; // if we failed parsing the GeometryDef, we are done!
-                }
-                else if (EQUAL(psFieldItemNode->pszValue,"Length") )
-                {
-                    nLength = atoi(psFieldItemNode->psChild->pszValue);
-                }
-                else if (EQUAL(psFieldItemNode->pszValue,"Precision") )
-                {
-                    nPrecision = atoi(psFieldItemNode->psChild->pszValue);
-                }
+                    if (EQUAL(psFieldItemNode->pszValue,"Name"))
+                    {
+                        char* pszUnescaped = CPLUnescapeString(
+                            psFieldItemNode->psChild->pszValue, NULL, CPLES_XML);
+                        fieldName = pszUnescaped;
+                        CPLFree(pszUnescaped);
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"Type") )
+                    {
+                        char* pszUnescaped = CPLUnescapeString(
+                            psFieldItemNode->psChild->pszValue, NULL, CPLES_XML);
+                        fieldType = pszUnescaped;
+                        CPLFree(pszUnescaped);
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"GeometryDef") )
+                    {
+                        if (!ParseGeometryDef(psFieldItemNode))
+                            return false; // if we failed parsing the GeometryDef, we are done!
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"Length") )
+                    {
+                        nLength = atoi(psFieldItemNode->psChild->pszValue);
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"Precision") )
+                    {
+                        nPrecision = atoi(psFieldItemNode->psChild->pszValue);
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"IsNullable") )
+                    {
+                        bNullable = EQUAL(psFieldItemNode->psChild->pszValue, "true");
+                    }
+                    else if (EQUAL(psFieldItemNode->pszValue,"DefaultValue"))
+                    {
+                        osDefault = CPLGetXMLValue(psFieldItemNode, NULL, "");
+                    }
                 }
             }
 
@@ -1982,6 +2074,7 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
             if (fieldType == "esriFieldTypeGeometry")
             {
                 m_strShapeFieldName = fieldName;
+                m_pFeatureDefn->GetGeomFieldDefn(0)->SetNullable(bNullable);
 
                 continue; // finish here for special field - don't add as OGR fielddef
             }
@@ -2008,8 +2101,57 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
 
             OGRFieldDefn fieldTemplate( fieldName.c_str(), ogrType);
             fieldTemplate.SetSubType(eSubType);
-            //fieldTemplate.SetWidth(nLength);
+            /* On creation (GDBFieldTypeToWidthPrecision) if string width is 0, we pick up */
+            /* 65535 by default to mean unlimited string length, but we don't want */
+            /* to advertize such a big number */
+            if( ogrType == OFTString && nLength < 65535 )
+                fieldTemplate.SetWidth(nLength);
             //fieldTemplate.SetPrecision(nPrecision);
+            fieldTemplate.SetNullable(bNullable);
+            if( osDefault.size() )
+            {
+                if( ogrType == OFTString )
+                {
+                    char* pszTmp = CPLEscapeString(osDefault.c_str(), -1, CPLES_SQL);
+                    osDefault = "'";
+                    osDefault += pszTmp;
+                    CPLFree(pszTmp);
+                    osDefault += "'";
+                    fieldTemplate.SetDefault(osDefault.c_str());
+                }
+                else if( ogrType == OFTInteger ||
+                         ogrType == OFTReal )
+                {
+#ifdef unreliable
+                    /* Disabling this as GDBs and the FileGDB SDK aren't reliable for numeric values */
+                    /* It often occurs that the XML definition in a00000004.gdbtable doesn't */
+                    /* match the default values (in binary) found in the field definition */
+                    /* section of the .gdbtable of the layers themselves */
+                    /* The Table::GetDefinition() API of FileGDB doesn't seem to use the */
+                    /* XML definition, but rather the values found in the field definition */
+                    /* section of the .gdbtable of the layers themselves */
+                    /* It seems that the XML definition in a00000004.gdbtable is authoritative */
+                    /* in ArcGIS, so we're screwed... */
+
+                    fieldTemplate.SetDefault(osDefault.c_str());
+#endif
+                    bShouldQueryOpenFileGDB = TRUE;
+                }
+                else if( ogrType == OFTDateTime )
+                {
+                    int nYear, nMonth, nDay, nHour, nMinute;
+                    float fSecond;
+                    if( sscanf(osDefault.c_str(), "%d-%d-%dT%d:%d:%fZ", &nYear, &nMonth, &nDay,
+                        &nHour, &nMinute, &fSecond) == 6 ||
+                        sscanf(osDefault.c_str(), "'%d-%d-%d %d:%d:%fZ'", &nYear, &nMonth, &nDay,
+                             &nHour, &nMinute, &fSecond) == 6 )
+                    {
+                        fieldTemplate.SetDefault(CPLSPrintf("'%04d/%02d/%02d %02d:%02d:%02d'",
+                               nYear, nMonth, nDay, nHour, nMinute, (int)(fSecond + 0.5)));
+                    }
+                }
+            }
+
             m_pFeatureDefn->AddFieldDefn( &fieldTemplate );
 
             m_vOGRFieldToESRIField.push_back(StringToWString(fieldName));
@@ -2017,6 +2159,33 @@ bool FGdbLayer::GDBToOGRFields(CPLXMLNode* psRoot)
             if( ogrType == OFTBinary )
                 m_apoByteArrays.push_back(new ByteArray());
 
+        }
+    }
+
+    /* Using OpenFileGDB to get reliable default values for integer/real fields */
+    if( bShouldQueryOpenFileGDB )
+    {
+        const char* apszDrivers[] = { "OpenFileGDB", NULL };
+        GDALDataset* poDS = (GDALDataset*) GDALOpenEx(m_pDS->GetName(),
+                            GDAL_OF_VECTOR, (char**)apszDrivers, NULL, NULL);
+        if( poDS != NULL )
+        {
+            OGRLayer* poLyr = poDS->GetLayerByName(GetName());
+            if( poLyr )
+            {
+                for(int i=0;i<poLyr->GetLayerDefn()->GetFieldCount();i++)
+                {
+                    OGRFieldDefn* poSrcDefn = poLyr->GetLayerDefn()->GetFieldDefn(i);
+                    if( (poSrcDefn->GetType() == OFTInteger || poSrcDefn->GetType() == OFTReal) &&
+                        poSrcDefn->GetDefault() != NULL )
+                    {
+                        int nIdxDst = m_pFeatureDefn->GetFieldIndex(poSrcDefn->GetNameRef());
+                        if( nIdxDst >= 0 )
+                            m_pFeatureDefn->GetFieldDefn(nIdxDst)->SetDefault(poSrcDefn->GetDefault());
+                    }
+                }
+            }
+            GDALClose( poDS );
         }
     }
 
@@ -2407,7 +2576,7 @@ OGRFeature* FGdbLayer::GetNextFeature()
 /*                             GetFeature()                             */
 /************************************************************************/
 
-OGRFeature *FGdbLayer::GetFeature( long oid )
+OGRFeature *FGdbLayer::GetFeature( GIntBig oid )
 {
     // do query to fetch individual row
     EnumRows       enumRows;
@@ -2433,7 +2602,7 @@ OGRFeature *FGdbLayer::GetFeature( long oid )
 /*                          GetFeatureCount()                           */
 /************************************************************************/
 
-int FGdbLayer::GetFeatureCount( CPL_UNUSED int bForce )
+GIntBig FGdbLayer::GetFeatureCount( CPL_UNUSED int bForce )
 {
     long           hr;
     int32          rowCount = 0;
@@ -2697,3 +2866,4 @@ int FGdbLayer::TestCapability( const char* pszCap )
     else 
         return FALSE;
 }
+

@@ -75,11 +75,11 @@ class OGRXLSXLayer : public OGRMemLayer
 
     /* For external usage. Mess with FID */
     virtual OGRFeature *        GetNextFeature();
-    virtual OGRFeature         *GetFeature( long nFeatureId );
+    virtual OGRFeature         *GetFeature( GIntBig nFeatureId );
     virtual OGRErr              ISetFeature( OGRFeature *poFeature );
-    virtual OGRErr              DeleteFeature( long nFID );
+    virtual OGRErr              DeleteFeature( GIntBig nFID );
 
-    virtual OGRErr      SetNextByIndex( long nIndex )
+    virtual OGRErr      SetNextByIndex( GIntBig nIndex )
     { Init(); return OGRMemLayer::SetNextByIndex(nIndex); }
 
     OGRErr              ICreateFeature( OGRFeature *poFeature )
@@ -88,7 +88,7 @@ class OGRXLSXLayer : public OGRMemLayer
     OGRFeatureDefn *    GetLayerDefn()
     { Init(); return OGRMemLayer::GetLayerDefn(); }
 
-    int                 GetFeatureCount( int bForce )
+    GIntBig                 GetFeatureCount( int bForce )
     { Init(); return OGRMemLayer::GetFeatureCount(bForce); }
 
     virtual OGRErr      CreateField( OGRFieldDefn *poField,
@@ -135,6 +135,18 @@ typedef struct
     int               nBeginDepth;
 } HandlerState;
 
+class XLSXFieldTypeExtended
+{
+public:
+    OGRFieldType      eType;
+    int               bHasMS;
+
+                    XLSXFieldTypeExtended() : eType(OFTMaxType), bHasMS(FALSE) {}
+                    XLSXFieldTypeExtended(OGRFieldType eType,
+                                          int bHasMS = FALSE) :
+                                    eType(eType), bHasMS(bHasMS) {}
+};
+
 class OGRXLSXDataSource : public OGRDataSource
 {
     char*               pszName;
@@ -176,8 +188,8 @@ class OGRXLSXDataSource : public OGRDataSource
     std::vector<std::string>  apoCurLineTypes;
 
     int                        bInCellXFS;
-    std::map<int,OGRFieldType> apoMapStyleFormats;
-    std::vector<OGRFieldType>  apoStyles;
+    std::map<int,XLSXFieldTypeExtended> apoMapStyleFormats;
+    std::vector<XLSXFieldTypeExtended>  apoStyles;
 
     void                PushState(HandlerStateEnum eVal);
     void                startElementDefault(const char *pszName, const char **ppszAttr);

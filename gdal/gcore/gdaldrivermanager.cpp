@@ -55,9 +55,9 @@ static const char *pszUpdatableINST_DATA =
 /************************************************************************/
 
 static volatile GDALDriverManager        *poDM = NULL;
-static void *hDMMutex = NULL;
+static CPLMutex *hDMMutex = NULL;
 
-void** GDALGetphDMMutex() { return &hDMMutex; }
+CPLMutex** GDALGetphDMMutex() { return &hDMMutex; }
 
 /************************************************************************/
 /*                        GetGDALDriverManager()                        */
@@ -180,7 +180,7 @@ GDALDriverManager::~GDALDriverManager()
         }
     } while(bHasDroppedRef);
 
-    /* Now let's destroy the dataset pool. Nobody shoud use it afterwards */
+    /* Now let's destroy the dataset pool. Nobody should use it afterwards */
     /* if people have well released their dependent datasets above */
     GDALDatasetPoolForceDestroy();
 
@@ -349,10 +349,7 @@ GDALDriver * GDALDriverManager::GetDriver( int iDriver )
 {
     CPLMutexHolderD( &hDMMutex );
 
-    if( iDriver < 0 || iDriver >= nDrivers )
-        return NULL;
-    else
-        return papoDrivers[iDriver];
+    return GetDriver_unlocked(iDriver);
 }
 
 /************************************************************************/
@@ -403,7 +400,7 @@ int GDALDriverManager::RegisterDriver( GDALDriver * poDriver )
 /*      If it is already registered, just return the existing           */
 /*      index.                                                          */
 /* -------------------------------------------------------------------- */
-    if( GetDriverByName( poDriver->GetDescription() ) != NULL )
+    if( GetDriverByName_unlocked( poDriver->GetDescription() ) != NULL )
     {
         int             i;
 
@@ -450,7 +447,8 @@ int GDALDriverManager::RegisterDriver( GDALDriver * poDriver )
     }
     
     if( poDriver->GetMetadataItem( GDAL_DMD_OPENOPTIONLIST ) != NULL &&
-        poDriver->pfnIdentify == NULL )
+        poDriver->pfnIdentify == NULL &&
+        !EQUALN(poDriver->GetDescription(), "Interlis", strlen("Interlis")) )
     {
         CPLDebug("GDAL", "Driver %s that defines GDAL_DMD_OPENOPTIONLIST must also "
                  "implement Identify(), so that it can be used",

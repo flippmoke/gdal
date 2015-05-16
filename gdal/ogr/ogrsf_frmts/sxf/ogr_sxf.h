@@ -60,7 +60,7 @@ protected:
     std::set<GUInt16> snAttributeCodes;
     int m_nSXFFormatVer;
     CPLString sFIDColumn_;
-    void            **m_hIOMutex;
+    CPLMutex            **m_hIOMutex;
     double              m_dfCoeff;
     virtual OGRFeature *       GetNextRawFeature(long nFID);
 
@@ -75,18 +75,18 @@ protected:
     OGRFeature *TranslateLine(const SXFRecordDescription& certifInfo, const char * psBuff, GUInt32 nBufLen);
     OGRFeature *TranslateVetorAngle(const SXFRecordDescription& certifInfo, const char * psBuff, GUInt32 nBufLen);
 public:
-    OGRSXFLayer(VSILFILE* fp, void** hIOMutex, GByte nID, const char* pszLayerName, int nVer, const SXFMapDescription&  sxfMapDesc);
+    OGRSXFLayer(VSILFILE* fp, CPLMutex** hIOMutex, GByte nID, const char* pszLayerName, int nVer, const SXFMapDescription&  sxfMapDesc);
     ~OGRSXFLayer();
 
 	virtual void                ResetReading();
     virtual OGRFeature         *GetNextFeature();
-    virtual OGRErr              SetNextByIndex(long nIndex);
-    virtual OGRFeature         *GetFeature(long nFID);
+    virtual OGRErr              SetNextByIndex(GIntBig nIndex);
+    virtual OGRFeature         *GetFeature(GIntBig nFID);
     virtual OGRFeatureDefn     *GetLayerDefn() { return poFeatureDefn;}
 
     virtual int                 TestCapability( const char * );
 
-    virtual int         GetFeatureCount(int bForce = TRUE);
+    virtual GIntBig     GetFeatureCount(int bForce = TRUE);
     virtual OGRErr      GetExtent(OGREnvelope *psExtent, int bForce = TRUE);
     virtual OGRSpatialReference *GetSpatialRef();
     virtual const char* GetFIDColumn();
@@ -111,7 +111,7 @@ class OGRSXFDataSource : public OGRDataSource
     size_t              nLayers;
 
     VSILFILE* fpSXF;    
-    void  *hIOMutex;
+    CPLMutex  *hIOMutex;
     void FillLayers(void);
     void CreateLayers();
     void CreateLayers(VSILFILE* fpRSC);

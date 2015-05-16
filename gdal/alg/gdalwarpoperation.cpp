@@ -207,7 +207,12 @@ int GDALWarpOperation::ValidateOptions()
         && psOptions->eResampleAlg != GRA_CubicSpline
         && psOptions->eResampleAlg != GRA_Lanczos
         && psOptions->eResampleAlg != GRA_Average
-        && psOptions->eResampleAlg != GRA_Mode )
+        && psOptions->eResampleAlg != GRA_Mode
+        && psOptions->eResampleAlg != GRA_Max 
+        && psOptions->eResampleAlg != GRA_Min
+        && psOptions->eResampleAlg != GRA_Med
+        && psOptions->eResampleAlg != GRA_Q1
+        && psOptions->eResampleAlg != GRA_Q3)
     {
         CPLError( CE_Failure, CPLE_IllegalArg, 
                   "GDALWarpOptions.Validate()\n"
@@ -741,15 +746,15 @@ typedef struct
 {
     GDALWarpOperation *poOperation;
     GDALWarpChunk     *pasChunkInfo;
-    void              *hThreadHandle;
+    CPLJoinableThread *hThreadHandle;
     CPLErr             eErr;
     double             dfProgressBase;
     double             dfProgressScale;
-    void              *hIOMutex;
+    CPLMutex          *hIOMutex;
 
-    void              *hCondMutex;
+    CPLMutex          *hCondMutex;
     int                bIOMutexTaken;
-    void              *hCond;
+    CPLCond           *hCond;
 } ChunkThreadData;
 
 
@@ -829,8 +834,8 @@ CPLErr GDALWarpOperation::ChunkAndWarpMulti(
     CPLReleaseMutex( hIOMutex );
     CPLReleaseMutex( hWarpMutex );
 
-    void* hCond = CPLCreateCond();
-    void* hCondMutex = CPLCreateMutex();
+    CPLCond* hCond = CPLCreateCond();
+    CPLMutex* hCondMutex = CPLCreateMutex();
     CPLReleaseMutex(hCondMutex);
 
 /* -------------------------------------------------------------------- */
@@ -1097,23 +1102,28 @@ CPLErr GDALWarpOperation::CollectChunkList(
         (dfSrcFillRatio > 0 && dfSrcFillRatio < 0.5 && (nDstXSize > 100 || nDstYSize > 100) &&
          CSLFetchBoolean( psOptions->papszWarpOptions, "SRC_FILL_RATIO_HEURISTICS", TRUE )) )
     {
-        CPLErr eErr2;
-
-        int bOptimizeSize =
+        CPLErr eErr2 = CE_None;
+        
+        int bStreamableOutput =
+                CSLFetchBoolean( psOptions->papszWarpOptions, "STREAMABLE_OUTPUT", FALSE );
+        int bOptimizeSize = !bStreamableOutput &&
                 CSLFetchBoolean( psOptions->papszWarpOptions, "OPTIMIZE_SIZE", FALSE );
 
         /* If the region width is greater than the region height, */
         /* cut in half in the width. When we want to optimize the size */
         /* of a compressed output dataset, do this only if each half part */
         /* is at least as wide as the block width */
+        int bHasDivided = FALSE;
         if( nDstXSize > nDstYSize &&
-            (!bOptimizeSize ||
-             (bOptimizeSize && (nDstXSize / 2 >= nBlockXSize || nDstYSize == 1))) )
+            ((!bOptimizeSize && !bStreamableOutput) ||
+             (bOptimizeSize && (nDstXSize / 2 >= nBlockXSize || nDstYSize == 1)) ||
+             (bStreamableOutput && nDstXSize / 2 >= nBlockXSize && nDstYSize == nBlockYSize)) )
         {
+            bHasDivided = TRUE;
             int nChunk1 = nDstXSize / 2;
             
             /* In the optimize size case, try to stick on target block boundaries */
-            if (bOptimizeSize && nChunk1 > nBlockXSize)
+            if ((bOptimizeSize || bStreamableOutput) && nChunk1 > nBlockXSize)
                 nChunk1 = (nChunk1 / nBlockXSize) * nBlockXSize;
             
             int nChunk2 = nDstXSize - nChunk1;
@@ -1124,12 +1134,13 @@ CPLErr GDALWarpOperation::CollectChunkList(
             eErr2 = CollectChunkList( nDstXOff+nChunk1, nDstYOff, 
                                       nChunk2, nDstYSize );
         }
-        else
+        else if( !(bStreamableOutput && nDstYSize / 2 < nBlockYSize) )
         {
+            bHasDivided = TRUE;
             int nChunk1 = nDstYSize / 2;
 
             /* In the optimize size case, try to stick on target block boundaries */
-            if (bOptimizeSize && nChunk1 > nBlockYSize)
+            if ((bOptimizeSize || bStreamableOutput) && nChunk1 > nBlockYSize)
                 nChunk1 = (nChunk1 / nBlockYSize) * nBlockYSize;
 
             int nChunk2 = nDstYSize - nChunk1;
@@ -1141,10 +1152,13 @@ CPLErr GDALWarpOperation::CollectChunkList(
                                       nDstXSize, nChunk2 );
         }
 
-        if( eErr == CE_None )
-            return eErr2;
-        else
-            return eErr;
+        if( bHasDivided )
+        {
+            if( eErr == CE_None )
+                return eErr2;
+            else
+                return eErr;
+        }
     }
 
 /* -------------------------------------------------------------------- */
@@ -1605,11 +1619,13 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
     if( eErr == CE_None && psOptions->nSrcAlphaBand > 0 &&
         nSrcXSize > 0 && nSrcYSize > 0 )
     {
-        CPLAssert( oWK.pafDstDensity == NULL );
+        CPLAssert( oWK.pafUnifiedSrcDensity == NULL );
 
         eErr = CreateKernelMask( &oWK, 0, "UnifiedSrcDensity" );
         
         if( eErr == CE_None )
+        {
+            int bOutAllOpaque = FALSE;
             eErr = 
                 GDALWarpSrcAlphaMasker( psOptions, 
                                         psOptions->nBandCount, 
@@ -1617,7 +1633,15 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
                                         oWK.nSrcXOff, oWK.nSrcYOff, 
                                         oWK.nSrcXSize, oWK.nSrcYSize,
                                         oWK.papabySrcImage,
-                                        TRUE, oWK.pafUnifiedSrcDensity );
+                                        TRUE, oWK.pafUnifiedSrcDensity,
+                                        &bOutAllOpaque );
+            if( bOutAllOpaque )
+            {
+                //CPLDebug("WARP", "No need for a source density mask as all values are opaque");
+                CPLFree(oWK.pafUnifiedSrcDensity);
+                oWK.pafUnifiedSrcDensity = NULL;
+            }
+        }
     }
 
 /* -------------------------------------------------------------------- */
@@ -1672,12 +1696,14 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
     }
     
 /* -------------------------------------------------------------------- */
-/*      If we have source nodata values create, or update the           */
-/*      validity mask.                                                  */
+/*      If we have source nodata values create the validity mask.       */
 /* -------------------------------------------------------------------- */
     if( eErr == CE_None && psOptions->padfSrcNoDataReal != NULL &&
         nSrcXSize > 0 && nSrcYSize > 0 )
     {
+        CPLAssert( oWK.papanBandSrcValid == NULL );
+
+        int bAllBandsAllValid = TRUE;
         for( i = 0; i < psOptions->nBandCount && eErr == CE_None; i++ )
         {
             eErr = CreateKernelMask( &oWK, i, "BandSrcValid" );
@@ -1688,14 +1714,29 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
                 adfNoData[0] = psOptions->padfSrcNoDataReal[i];
                 adfNoData[1] = psOptions->padfSrcNoDataImag[i];
 
+                int bAllValid = FALSE;
                 eErr = 
                     GDALWarpNoDataMasker( adfNoData, 1, 
                                           psOptions->eWorkingDataType,
                                           oWK.nSrcXOff, oWK.nSrcYOff, 
                                           oWK.nSrcXSize, oWK.nSrcYSize,
                                           &(oWK.papabySrcImage[i]),
-                                          FALSE, oWK.papanBandSrcValid[i] );
+                                          FALSE, oWK.papanBandSrcValid[i],
+                                          &bAllValid );
+                if( !bAllValid )
+                    bAllBandsAllValid = FALSE;
             }
+        }
+
+        /* Optimization: if all pixels in all bands are valid, */
+        /* we don't need a mask */
+        if( bAllBandsAllValid )
+        {
+            //CPLDebug("WARP", "No need for a source nodata mask as all values are valid");
+            for( i = 0; i < oWK.nBands; i++ )
+                CPLFree( oWK.papanBandSrcValid[i] );
+            CPLFree( oWK.papanBandSrcValid );
+            oWK.papanBandSrcValid = NULL;
         }
         
 /* -------------------------------------------------------------------- */
@@ -1704,7 +1745,8 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
 /*      is, we only treat a pixel as nodata if all bands match their    */
 /*      respective nodata values.                                       */
 /* -------------------------------------------------------------------- */
-        if( CSLFetchBoolean( psOptions->papszWarpOptions, "UNIFIED_SRC_NODATA",
+        if( oWK.papanBandSrcValid != NULL &&
+            CSLFetchBoolean( psOptions->papszWarpOptions, "UNIFIED_SRC_NODATA",
                              FALSE ) 
             && eErr == CE_None )
         {
@@ -1713,19 +1755,22 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
 
             eErr = CreateKernelMask( &oWK, i, "UnifiedSrcValid" );
 
-            memset( oWK.panUnifiedSrcValid, 0, nBytesInMask );
-            
-            for( i = 0; i < psOptions->nBandCount; i++ )
+            if( eErr == CE_None )
             {
-                for( iWord = nBytesInMask/4 - 1; iWord >= 0; iWord-- )
-                    oWK.panUnifiedSrcValid[iWord] |= 
-                        oWK.papanBandSrcValid[i][iWord];
-                CPLFree( oWK.papanBandSrcValid[i] );
-                oWK.papanBandSrcValid[i] = NULL;
+                memset( oWK.panUnifiedSrcValid, 0, nBytesInMask );
+                
+                for( i = 0; i < psOptions->nBandCount; i++ )
+                {
+                    for( iWord = nBytesInMask/4 - 1; iWord >= 0; iWord-- )
+                        oWK.panUnifiedSrcValid[iWord] |= 
+                            oWK.papanBandSrcValid[i][iWord];
+                    CPLFree( oWK.papanBandSrcValid[i] );
+                    oWK.papanBandSrcValid[i] = NULL;
+                }
+                
+                CPLFree( oWK.papanBandSrcValid );
+                oWK.papanBandSrcValid = NULL;
             }
-            
-            CPLFree( oWK.papanBandSrcValid );
-            oWK.papanBandSrcValid = NULL;
         }
     }
 
@@ -1759,8 +1804,8 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
     }
     
 /* -------------------------------------------------------------------- */
-/*      If we have destination nodata values create, or update the      */
-/*      validity mask.  We clear the DstValid for any pixel that we     */
+/*      If we have destination nodata values create the                 */
+/*      validity mask.  We set the DstValid for any pixel that we       */
 /*      do no have valid data in *any* of the source bands.             */
 /*                                                                      */
 /*      Note that we don't support any concept of unified nodata on     */
@@ -1769,14 +1814,15 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
 /* -------------------------------------------------------------------- */
     if( eErr == CE_None && psOptions->padfDstNoDataReal != NULL )
     {
-        GUInt32 *panBandMask = NULL, *panMergedMask = NULL;
+        CPLAssert( oWK.panDstValid == NULL );
+
+        GUInt32 *panBandMask = NULL;
         int     nMaskWords = (oWK.nDstXSize * oWK.nDstYSize + 31)/32;
 
         eErr = CreateKernelMask( &oWK, 0, "DstValid" );
         if( eErr == CE_None )
         {
             panBandMask = (GUInt32 *) CPLMalloc(nMaskWords*4);
-            panMergedMask = (GUInt32 *) CPLCalloc(nMaskWords,4);
         }
 
         if( eErr == CE_None && panBandMask != NULL )
@@ -1792,23 +1838,30 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
                 adfNoData[0] = psOptions->padfDstNoDataReal[iBand];
                 adfNoData[1] = psOptions->padfDstNoDataImag[iBand];
             
+                int bAllValid = FALSE;
                 eErr = 
                     GDALWarpNoDataMasker( adfNoData, 1, 
                                           psOptions->eWorkingDataType,
                                           oWK.nDstXOff, oWK.nDstYOff, 
                                           oWK.nDstXSize, oWK.nDstYSize,
                                           oWK.papabyDstImage + iBand,
-                                          FALSE, panBandMask );
+                                          FALSE, panBandMask,
+                                          &bAllValid );
+
+                /* Optimization: if there's a single band and all pixels are */
+                /* valid then we don't need a mask */
+                if( bAllValid && psOptions->nBandCount == 1 )
+                {
+                    //CPLDebug("WARP", "No need for a destination nodata mask as all values are valid");
+                    CPLFree(oWK.panDstValid);
+                    oWK.panDstValid = NULL;
+                    break;
+                }
 
                 for( iWord = nMaskWords - 1; iWord >= 0; iWord-- )
-                    panMergedMask[iWord] |= panBandMask[iWord];
+                    oWK.panDstValid[iWord] |= panBandMask[iWord];
             }
             CPLFree( panBandMask );
-
-            for( iWord = nMaskWords - 1; iWord >= 0; iWord-- )
-                oWK.panDstValid[iWord] &= panMergedMask[iWord];
-
-            CPLFree( panMergedMask );
         }
     }
         
@@ -1978,7 +2031,7 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
         nXSize = poKernel->nDstXSize;
         nYSize = poKernel->nDstYSize;
         nBitsPerPixel = 1;
-        nDefault = 0xff;
+        nDefault = 0;
     }
     else if( EQUAL(pszType,"DstDensity") )
     {

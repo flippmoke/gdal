@@ -29,7 +29,6 @@
 
 import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
@@ -327,7 +326,7 @@ def ogr_vrt_9():
         return 'skip'
 
     lyr = gdaltest.vrt_ds.GetLayerByName( 'test3' )
-    lyr.SetAttributeFilter( 'other = "Second"' )
+    lyr.SetAttributeFilter( "other = 'Second'" )
     lyr.ResetReading()
 
     feat = lyr.GetNextFeature()
@@ -1449,10 +1448,15 @@ def ogr_vrt_25():
     if lyr.GetFIDColumn() != 'fid':
         return 'fail'
 
-    # test3 layer just declares fid, and explicit fields without the fid
+    # test6 layer just declares fid, and explicit fields without the fid
     # column, so we can *not* report it
     lyr = ds.GetLayerByName('test6')
     if lyr.GetFIDColumn() != '':
+        return 'fail'
+
+    # test7 layer just declares fid with an external visible name
+    lyr = ds.GetLayerByName('test7')
+    if lyr.GetFIDColumn() != 'bar':
         return 'fail'
 
     # test2 layer does not declare fid, and source layer has no fid column
@@ -1480,6 +1484,7 @@ def ogr_vrt_26():
     lyr = sqlite_ds.CreateLayer('test')
     lyr.CreateField(ogr.FieldDefn('foo', ogr.OFTString))
     lyr = None
+    sqlite_ds.SyncToDisk()
 
     vrt_ds = ogr.Open("""<OGRVRTDataSource>
     <OGRVRTLayer name="test">
@@ -1592,7 +1597,7 @@ def ogr_vrt_28():
         gdal.ErrorReset()
         gdal.PushErrorHandler('CPLQuietErrorHandler')
         lyr = ds.GetLayer(i)
-        feat = lyr.GetNextFeature()
+        lyr.GetNextFeature()
         gdal.PopErrorHandler()
         if gdal.GetLastErrorMsg() == '':
             gdaltest.post_reason('expected failure for layer %d of datasource %s' % (i, ds.GetName()))
@@ -2042,7 +2047,7 @@ def ogr_vrt_30():
     sr = osr.SpatialReference()
     sr.ImportFromEPSG(4326)
     lyr = ds.CreateLayer('ogr_vrt_30_2', srs = sr)
-    lyr.CreateField(ogr.FieldDefn('id2', ogr.OFTInteger))
+    lyr.CreateField(ogr.FieldDefn('id2', ogr.OFTInteger64))
     lyr.CreateField(ogr.FieldDefn('id3', ogr.OFTInteger))
 
     for i in range(5):
@@ -2102,6 +2107,9 @@ def ogr_vrt_30():
         elif check == 3:
             if lyr.GetLayerDefn().GetFieldCount() != 3:
                 gdaltest.post_reason('did not get expected field count')
+                return 'fail'
+            if lyr.GetLayerDefn().GetFieldDefn(1).GetType() != ogr.OFTInteger64:
+                gdaltest.post_reason('did not get expected field type')
                 return 'fail'
         elif check == 4:
             feat = lyr.GetNextFeature()
@@ -3361,6 +3369,85 @@ def ogr_vrt_34():
     return 'success'
 
 ###############################################################################
+# Test nullable fields
+
+def ogr_vrt_35():
+    if gdaltest.vrt_ds is None:
+        return 'skip'
+
+    f = open('tmp/test.csv', 'wb')
+    f.write('c1,c2,WKT,WKT2\n'.encode('ascii'))
+    f.write('1,,"POINT(2 49),"\n'.encode('ascii'))
+    f.close()
+
+    try:
+        os.remove('tmp/test.csvt')
+    except:
+        pass
+
+    # Explicit nullable
+    f = open('tmp/test.vrt', 'wb')
+    f.write("""<OGRVRTDataSource>
+    <OGRVRTLayer name="test">
+        <SrcDataSource relativeToVRT="1">test.csv</SrcDataSource>
+        <SrcLayer>test</SrcLayer>
+        <GeometryField encoding="WKT" field="WKT" name="g1" nullable="false"/>
+        <GeometryField encoding="WKT" field="WKT2" name="g2"/>
+        <Field name="c1" type="Integer" nullable="false"/>
+        <Field name="c2" type="Integer"/>
+    </OGRVRTLayer>
+</OGRVRTDataSource>""".encode('ascii'))
+    f.close()
+
+    ds = ogr.Open( 'tmp/test.vrt' )
+    lyr = ds.GetLayerByName( 'test' )
+    if lyr.GetLayerDefn().GetFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(1).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(1).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    # Implicit nullable
+    f = open('tmp/test2.vrt', 'wb')
+    f.write("""<OGRVRTDataSource>
+    <OGRVRTLayer name="test">
+        <SrcDataSource relativeToVRT="1">test.vrt</SrcDataSource>
+        <SrcLayer>test</SrcLayer>
+    </OGRVRTLayer>
+</OGRVRTDataSource>""".encode('ascii'))
+    f.close()
+
+    ds = ogr.Open( 'tmp/test2.vrt' )
+    lyr = ds.GetLayerByName( 'test' )
+    if lyr.GetLayerDefn().GetFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(1).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(0).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(1).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    os.unlink('tmp/test.csv')
+    os.unlink('tmp/test.vrt')
+    os.unlink('tmp/test2.vrt')
+
+    return 'success'
+
+###############################################################################
 # 
 
 def ogr_vrt_cleanup():
@@ -3423,6 +3510,7 @@ gdaltest_list = [
     ogr_vrt_32,
     ogr_vrt_33,
     ogr_vrt_34,
+    ogr_vrt_35,
     ogr_vrt_cleanup ]
 
 if __name__ == '__main__':

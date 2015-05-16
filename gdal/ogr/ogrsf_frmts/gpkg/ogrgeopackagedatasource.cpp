@@ -188,6 +188,16 @@ OGRErr GDALGeoPackageDataset::PragmaCheck(const char * pszPragma, const char * p
     return OGRERR_NONE; 
 }
 
+static OGRErr GDALGPKGImportFromEPSG(OGRSpatialReference *poSpatialRef,
+                                     int nEPSGCode)
+{
+    CPLPushErrorHandler(CPLQuietErrorHandler);
+    OGRErr eErr = poSpatialRef->importFromEPSG(nEPSGCode);
+    CPLPopErrorHandler();
+    CPLErrorReset();
+    return eErr;
+}
+
 
 OGRSpatialReference* GDALGeoPackageDataset::GetSpatialRef(int iSrsId)
 {
@@ -200,7 +210,7 @@ OGRSpatialReference* GDALGeoPackageDataset::GetSpatialRef(int iSrsId)
     }
     
     CPLString oSQL;
-    oSQL.Printf("SELECT definition FROM gpkg_spatial_ref_sys WHERE srs_id = %d", iSrsId);
+    oSQL.Printf("SELECT definition, organization, organization_coordsys_id FROM gpkg_spatial_ref_sys WHERE srs_id = %d", iSrsId);
     
     OGRErr err = SQLQuery(hDB, oSQL.c_str(), &oResult);
 
@@ -221,16 +231,22 @@ OGRSpatialReference* GDALGeoPackageDataset::GetSpatialRef(int iSrsId)
         return NULL;
     }
     
-    OGRSpatialReference *poSpatialRef = new OGRSpatialReference(pszWkt);
+    const char* pszOrganization = SQLResultGetValue(&oResult, 1, 0);
+    const char* pszOrganizationCoordsysID = SQLResultGetValue(&oResult, 2, 0);
     
-    if ( poSpatialRef == NULL )
+    OGRSpatialReference *poSpatialRef = new OGRSpatialReference();
+    // Try to import first from EPSG code, and then from WKT
+    if( !(pszOrganization && pszOrganizationCoordsysID && EQUAL(pszOrganization, "EPSG") &&
+          GDALGPKGImportFromEPSG(poSpatialRef, atoi(pszOrganizationCoordsysID)) == OGRERR_NONE) &&
+        poSpatialRef->SetFromUserInput(pszWkt) != OGRERR_NONE )
     {
-        SQLResultFree(&oResult);
         CPLError( CE_Warning, CPLE_AppDefined, "unable to parse srs_id '%d' well-known text '%s'",
-                  iSrsId, pszWkt);
+                iSrsId, pszWkt);
+        SQLResultFree(&oResult);
+        delete poSpatialRef;
         return NULL;
     }
-    
+
     SQLResultFree(&oResult);
     return poSpatialRef;
 }
@@ -593,11 +609,18 @@ int GDALGeoPackageDataset::Open( GDALOpenInfo* poOpenInfo )
     CheckUnknownExtensions();
 
     int bRet = FALSE;
+    int bHasGPKGGeometryColumns = FALSE;
     if( poOpenInfo->nOpenFlags & GDAL_OF_VECTOR )
+    {
+        SQLResult oResult;
+        err = SQLQuery(hDB, "pragma table_info('gpkg_geometry_columns')", &oResult);
+        bHasGPKGGeometryColumns = (err == OGRERR_NONE && oResult.nRowCount > 0);
+        SQLResultFree(&oResult);
+    }
+    if( bHasGPKGGeometryColumns )
     {
         /* Load layer definitions for all tables in gpkg_contents & gpkg_geometry_columns */
         /* and non-spatial tables as well */
-        SQLResult oResult;
         std::string osSQL =
             "SELECT c.table_name, c.identifier, 1 as is_spatial, c.min_x, c.min_y, c.max_x, c.max_y "
             "  FROM gpkg_geometry_columns g JOIN gpkg_contents c ON (g.table_name = c.table_name)"
@@ -611,6 +634,7 @@ int GDALGeoPackageDataset::Open( GDALOpenInfo* poOpenInfo )
                 "  WHERE data_type = 'aspatial' ";
         }
 
+        SQLResult oResult;
         err = SQLQuery(hDB, osSQL.c_str(), &oResult);
         if  ( err != OGRERR_NONE )
         {
@@ -646,7 +670,15 @@ int GDALGeoPackageDataset::Open( GDALOpenInfo* poOpenInfo )
         bRet = TRUE;
     }
     
-    if(  poOpenInfo->nOpenFlags & GDAL_OF_RASTER )
+    int bHasTileMatrixSet = FALSE;
+    if( poOpenInfo->nOpenFlags & GDAL_OF_RASTER )
+    {
+        SQLResult oResult;
+        err = SQLQuery(hDB, "pragma table_info('gpkg_tile_matrix_set')", &oResult);
+        bHasTileMatrixSet = (err == OGRERR_NONE && oResult.nRowCount > 0);
+        SQLResultFree(&oResult);
+    }
+    if( bHasTileMatrixSet )
     {
         SQLResult oResult;
         std::string osSQL =
@@ -1321,7 +1353,7 @@ CPLErr GDALGeoPackageDataset::FinalizeRasterRegistration()
     double dfGDALMaxX = m_adfGeoTransform[0] + nRasterXSize * m_adfGeoTransform[1];
     double dfGDALMaxY = m_adfGeoTransform[3];
 
-    SQLCommand(hDB, "BEGIN");
+    SoftStartTransaction();
 
     pszSQL = sqlite3_mprintf("INSERT INTO gpkg_contents "
         "(table_name,data_type,identifier,description,min_x,min_y,max_x,max_y,srs_id) VALUES "
@@ -1395,7 +1427,7 @@ CPLErr GDALGeoPackageDataset::FinalizeRasterRegistration()
         }
     }
     
-    SQLCommand(hDB, "COMMIT");
+    SoftCommitTransaction();
 
     m_nOverviewCount = m_nZoomLevel;
     m_bRecordInsertedInGPKGContent = TRUE;
@@ -1420,6 +1452,12 @@ CPLErr GDALGeoPackageDataset::FlushCacheWithErrCode()
     m_bInFlushCache = TRUE;
     // Short circuit GDALPamDataset to avoid serialization to .aux.xml
     GDALDataset::FlushCache();
+    
+    for( int i = 0; i < m_nLayers; i++ )
+    {
+        m_papoLayers[i]->RunDeferredCreationIfNecessary();
+        m_papoLayers[i]->CreateSpatialIndexIfNecessary();
+    }
 
     CPLErr eErr = CE_None;
     if( bUpdate )
@@ -1437,7 +1475,7 @@ CPLErr GDALGeoPackageDataset::FlushCacheWithErrCode()
     GDALGeoPackageDataset* poMainDS = m_poParentDS ? m_poParentDS : this;
     if( poMainDS->m_nTileInsertionCount )
     {
-        SQLCommand(GetDB(), "COMMIT");
+        poMainDS->SoftCommitTransaction();
         poMainDS->m_nTileInsertionCount = 0;
     }
 
@@ -1610,7 +1648,7 @@ CPLErr GDALGeoPackageDataset::IBuildOverviews(
                     m_bZoomOther = TRUE;
                 }
 
-                SQLCommand(hDB, "BEGIN");
+                SoftStartTransaction();
 
                 CPLAssert(jCandidate > 0);
                 int nNewZoomLevel = m_papoOverviewDS[jCandidate-1]->m_nZoomLevel;
@@ -1627,7 +1665,10 @@ CPLErr GDALGeoPackageDataset::IBuildOverviews(
                     eErr = SQLCommand(hDB, pszSQL);
                     sqlite3_free(pszSQL);
                     if ( eErr != OGRERR_NONE )
+                    {
+                        SoftRollbackTransaction();
                         return CE_Failure;
+                    }
 
                     pszSQL = sqlite3_mprintf("UPDATE '%q' SET zoom_level = %d "
                         "WHERE zoom_level = %d",
@@ -1637,7 +1678,10 @@ CPLErr GDALGeoPackageDataset::IBuildOverviews(
                     eErr = SQLCommand(hDB, pszSQL);
                     sqlite3_free(pszSQL);
                     if ( eErr != OGRERR_NONE )
+                    {
+                        SoftRollbackTransaction();
                         return CE_Failure;
+                    }
                 }
 
                 double dfGDALMinX = m_adfGeoTransform[0];
@@ -1658,9 +1702,12 @@ CPLErr GDALGeoPackageDataset::IBuildOverviews(
                 eErr = SQLCommand(hDB, pszSQL);
                 sqlite3_free(pszSQL);
                 if ( eErr != OGRERR_NONE )
+                {
+                    SoftRollbackTransaction();
                     return CE_Failure;
-                
-                SQLCommand(hDB, "COMMIT");
+                }
+
+                SoftCommitTransaction();
 
                 m_nZoomLevel ++; /* this change our zoom level as well as previous overviews */
                 for(int k=0;k<jCandidate;k++)
@@ -1742,6 +1789,9 @@ CPLErr GDALGeoPackageDataset::IBuildOverviews(
 
 char **GDALGeoPackageDataset::GetMetadataDomainList()
 {
+    GetMetadata();
+    if( m_osRasterTable.size() != 0 )
+        GetMetadata("GEOPACKAGE");
     return BuildMetadataDomainList(GDALPamDataset::GetMetadataDomainList(),
                                    TRUE,
                                    "SUBDATASETS", NULL);
@@ -1892,6 +1942,14 @@ char **GDALGeoPackageDataset::GetMetadata( const char *pszDomain )
                                    "GEOPACKAGE" );
             nNonGDALMDIGeopackage ++;
         }
+        /*else if( strcmp( pszMDStandardURI, "http://www.isotc211.org/2005/gmd" ) == 0 &&
+            strcmp( pszMimeType, "text/xml" ) == 0 )
+        {
+            char* apszMD[2];
+            apszMD[0] = (char*)pszMetadata;
+            apszMD[1] = NULL;
+            oMDMD.SetMetadata(apszMD, "xml:MD_Metadata");
+        }*/
         else
         {
             oMDMD.SetMetadataItem( CPLSPrintf("GPKG_METADATA_ITEM_%d", nNonGDALMDILocal),
@@ -1912,11 +1970,9 @@ char **GDALGeoPackageDataset::GetMetadata( const char *pszDomain )
 void GDALGeoPackageDataset::WriteMetadata(CPLXMLNode* psXMLNode, /* will be destroyed by the method /*/
                                           const char* pszTableName)
 {
-    int bIsEmpty = (psXMLNode->psChild == NULL);
+    int bIsEmpty = (psXMLNode == NULL);
     char *pszXML = NULL;
-    if( bIsEmpty )
-        CPLDestroyXMLNode(psXMLNode);
-    else
+    if( !bIsEmpty )
     {
         CPLXMLNode* psMasterXMLNode = CPLCreateXMLNode( NULL, CXT_Element,
                                                         "GDALMultiDomainMetadata" );
@@ -2255,7 +2311,9 @@ CPLErr GDALGeoPackageDataset::FlushMetadata()
         oLocalMDMD.SetMetadata(papszMDDup);
         while( papszIter && *papszIter )
         {
-            if( !EQUAL(*papszIter, "") &&  !EQUAL(*papszIter, "IMAGE_STRUCTURE") )
+            if( !EQUAL(*papszIter, "") && 
+                !EQUAL(*papszIter, "IMAGE_STRUCTURE") && 
+                !EQUAL(*papszIter, "GEOPACKAGE") )
                 oLocalMDMD.SetMetadata(oMDMD.GetMetadata(*papszIter), *papszIter);
             papszIter ++;
         }
@@ -2265,10 +2323,7 @@ CPLErr GDALGeoPackageDataset::FlushMetadata()
     CSLDestroy(papszMDDup);
     papszMDDup = NULL;
 
-    if( psXMLNode != NULL )
-    {
-        WriteMetadata(psXMLNode, m_osRasterTable.c_str() );
-    }
+    WriteMetadata(psXMLNode, m_osRasterTable.c_str() );
 
     if( m_osRasterTable.size() )
     {
@@ -2285,10 +2340,63 @@ CPLErr GDALGeoPackageDataset::FlushMetadata()
         CSLDestroy(papszMDDup);
         papszMDDup = NULL;
         psXMLNode = oLocalMDMD.Serialize();
-        if( psXMLNode != NULL )
+
+        WriteMetadata(psXMLNode, NULL);
+    }
+
+    for(int i=0;i<m_nLayers;i++)
+    {
+        const char* pszIdentifier = m_papoLayers[i]->GetMetadataItem("IDENTIFIER");
+        const char* pszDescription = m_papoLayers[i]->GetMetadataItem("DESCRIPTION");
+        if( pszIdentifier != NULL )
         {
-            WriteMetadata(psXMLNode, NULL);
+            char* pszSQL = sqlite3_mprintf(
+                "UPDATE gpkg_contents SET identifier = '%q' WHERE table_name = '%q'",
+                pszIdentifier, m_papoLayers[i]->GetName());
+            SQLCommand(hDB, pszSQL);
+            sqlite3_free(pszSQL);
         }
+        if( pszDescription != NULL )
+        {
+            char* pszSQL = sqlite3_mprintf(
+                "UPDATE gpkg_contents SET description = '%q' WHERE table_name = '%q'",
+                pszDescription, m_papoLayers[i]->GetName());
+            SQLCommand(hDB, pszSQL);
+            sqlite3_free(pszSQL);
+        }
+
+        char** papszMDDup = NULL;
+        for( char** papszIter = m_papoLayers[i]->GetMetadata(); papszIter && *papszIter; ++papszIter )
+        {
+            if( EQUALN(*papszIter, "IDENTIFIER=", strlen("IDENTIFIER=")) )
+                continue;
+            if( EQUALN(*papszIter, "DESCRIPTION=", strlen("DESCRIPTION=")) )
+                continue;
+            if( EQUALN(*papszIter, "OLMD_FID64=", strlen("OLMD_FID64=")) )
+                continue;
+            papszMDDup = CSLInsertString(papszMDDup, -1, *papszIter);
+        }
+
+        CPLXMLNode* psXMLNode;
+        {
+            GDALMultiDomainMetadata oLocalMDMD;
+            char** papszDomainList = m_papoLayers[i]->GetMetadataDomainList();
+            char** papszIter = papszDomainList;
+            oLocalMDMD.SetMetadata(papszMDDup);
+            while( papszIter && *papszIter )
+            {
+                if( !EQUAL(*papszIter, "") )
+                    oLocalMDMD.SetMetadata(m_papoLayers[i]->GetMetadata(*papszIter), *papszIter);
+                papszIter ++;
+            }
+            CSLDestroy(papszDomainList);
+            psXMLNode = oLocalMDMD.Serialize();
+        }
+
+        CSLDestroy(papszMDDup);
+        papszMDDup = NULL;
+
+        WriteMetadata(psXMLNode, m_papoLayers[i]->GetName() );
     }
 
     return CE_None;
@@ -2395,7 +2503,7 @@ int GDALGeoPackageDataset::Create( const char * pszFilename,
     /* will be written into the main file and supported henceforth */
     SQLCommand(hDB, "PRAGMA encoding = \"UTF-8\"");
 
-    SQLCommand(hDB, "BEGIN");
+    SoftStartTransaction();
 
     int bCreateTriggers = CSLTestBoolean(CPLGetConfigOption("CREATE_TRIGGERS", "YES"));
     int bCreateGeometryColumns = CSLTestBoolean(CPLGetConfigOption("CREATE_GEOMETRY_COLUMNS", "YES"));
@@ -2797,7 +2905,7 @@ int GDALGeoPackageDataset::Create( const char * pszFilename,
         }
     }
 
-    SQLCommand(hDB, "COMMIT");
+    SoftCommitTransaction();
 
     /* Requirement 2: A GeoPackage SHALL contain 0x47503130 ("GP10" in ASCII) */
     /* in the application id field of the SQLite database header */
@@ -3186,24 +3294,6 @@ int GDALGeoPackageDataset::RegisterZoomOtherExtension()
 }
 
 /************************************************************************/
-/*                              AddColumn()                             */
-/************************************************************************/
-
-OGRErr GDALGeoPackageDataset::AddColumn(const char *pszTableName, const char *pszColumnName, const char *pszColumnType)
-{
-    char *pszSQL;
-    
-    pszSQL = sqlite3_mprintf("ALTER TABLE \"%s\" ADD COLUMN \"%s\" %s", 
-                             pszTableName, pszColumnName, pszColumnType);
-
-    OGRErr err = SQLCommand(hDB, pszSQL);
-    sqlite3_free(pszSQL);
-    
-    return err;
-}
-
-
-/************************************************************************/
 /*                              GetLayer()                              */
 /************************************************************************/
 
@@ -3230,7 +3320,6 @@ OGRLayer* GDALGeoPackageDataset::ICreateLayer( const char * pszLayerName,
                                       char **papszOptions )
 {
     int iLayer;
-    OGRErr err;
 
 /* -------------------------------------------------------------------- */
 /*      Verify we are in update mode.                                   */
@@ -3245,10 +3334,13 @@ OGRLayer* GDALGeoPackageDataset::ICreateLayer( const char * pszLayerName,
         return NULL;
     }
 
-    /* Read GEOMETRY_COLUMN option */
-    const char* pszGeomColumnName = CSLFetchNameValue(papszOptions, "GEOMETRY_COLUMN");
+    /* Read GEOMETRY_NAME option */
+    const char* pszGeomColumnName = CSLFetchNameValue(papszOptions, "GEOMETRY_NAME");
+    if (pszGeomColumnName == NULL) /* deprecated name */
+        pszGeomColumnName = CSLFetchNameValue(papszOptions, "GEOMETRY_COLUMN");
     if (pszGeomColumnName == NULL)
         pszGeomColumnName = "geom";
+    int bGeomNullable = CSLFetchBoolean(papszOptions, "GEOMETRY_NULLABLE", TRUE);
     
     /* Read FID option */
     const char* pszFIDColumnName = CSLFetchNameValue(papszOptions, "FID");
@@ -3302,100 +3394,15 @@ OGRLayer* GDALGeoPackageDataset::ICreateLayer( const char * pszLayerName,
         }
     }
 
-    /* Read our SRS_ID from the OGRSpatialReference */
-    int nSRSId = DEFAULT_SRID;
-    if( poSpatialRef != NULL )
-        nSRSId = GetSrsId( poSpatialRef );
-
-    int bIsSpatial = (eGType != wkbNone);
-
-    /* Requirement 25: The geometry_type_name value in a gpkg_geometry_columns */
-    /* row SHALL be one of the uppercase geometry type names specified in */
-    /* Geometry Types (Normative). */
-    const char *pszGeometryType = OGRToOGCGeomType(eGType);
-    
-    /* Create the table! */
-    char *pszSQL = NULL;
-    if ( bIsSpatial )
-    {
-        pszSQL = sqlite3_mprintf(
-            "CREATE TABLE \"%s\" ( "
-            "\"%s\" INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "\"%s\" %s )",
-             pszLayerName, pszFIDColumnName, pszGeomColumnName, pszGeometryType);
-    }
-    else
-    {
-        pszSQL = sqlite3_mprintf(
-            "CREATE TABLE \"%s\" ( "
-            "\"%s\" INTEGER PRIMARY KEY AUTOINCREMENT )",
-             pszLayerName, pszFIDColumnName);
-    }
-    
-    err = SQLCommand(hDB, pszSQL);
-    sqlite3_free(pszSQL);
-    if ( OGRERR_NONE != err )
-        return NULL;
-
-    /* Only spatial tables need to be registered in the metadata (hmmm) */
-    if ( bIsSpatial )
-    {
-        /* Requirement 27: The z value in a gpkg_geometry_columns table row */
-        /* SHALL be one of 0 (none), 1 (mandatory), or 2 (optional) */
-        int bGeometryTypeHasZ = wkbHasZ(eGType);
-
-        /* Update gpkg_geometry_columns with the table info */
-        pszSQL = sqlite3_mprintf(
-            "INSERT INTO gpkg_geometry_columns "
-            "(table_name,column_name,geometry_type_name,srs_id,z,m)"
-            " VALUES "
-            "('%q','%q','%q',%d,%d,%d)",
-            pszLayerName,pszGeomColumnName,pszGeometryType,
-            nSRSId,bGeometryTypeHasZ,0);
-    
-        err = SQLCommand(hDB, pszSQL);
-        sqlite3_free(pszSQL);
-        if ( err != OGRERR_NONE )
-            return NULL;
-    }
-
-    /* Update gpkg_contents with the table info */
-    char *pszSRSId = NULL;
-    if ( !bIsSpatial )
-    {
-        err = CreateGDALAspatialExtension();
-        if ( err != OGRERR_NONE )
-            return NULL;
-    }
-    else
-    {
-        pszSRSId = sqlite3_mprintf("%d", nSRSId);
-    }
-
-    pszSQL = sqlite3_mprintf(
-        "INSERT INTO gpkg_contents "
-        "(table_name,data_type,identifier,last_change,srs_id)"
-        " VALUES "
-        "('%q','%q','%q',strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ',CURRENT_TIMESTAMP),%Q)",
-        pszLayerName, (bIsSpatial ? "features": "aspatial"), pszLayerName, pszSRSId);
-
-    err = SQLCommand(hDB, pszSQL);
-    sqlite3_free(pszSQL);
-    if (pszSRSId) {
-        sqlite3_free(pszSRSId);
-    }
-    if ( err != OGRERR_NONE )
-        return NULL;
-
-    /* The database is now all set up, so create a blank layer and read in the */
-    /* info from the database. */
+    /* Create a blank layer. */
     OGRGeoPackageTableLayer *poLayer = new OGRGeoPackageTableLayer(this, pszLayerName);
-    
-    if( OGRERR_NONE != poLayer->ReadTableDefinition(eGType != wkbNone) )
-    {
-        delete poLayer;
-        return NULL;
-    }
+
+    poLayer->SetCreationParameters( eGType, pszGeomColumnName,
+                                    bGeomNullable,
+                                    poSpatialRef,
+                                    pszFIDColumnName,
+                                    CSLFetchNameValue(papszOptions, "IDENTIFIER"),
+                                    CSLFetchNameValue(papszOptions, "DESCRIPTION") );
 
     /* Should we create a spatial index ? */
     const char *pszSI = CSLFetchNameValue( papszOptions, "SPATIAL_INDEX" );
@@ -3405,8 +3412,6 @@ OGRLayer* GDALGeoPackageDataset::ICreateLayer( const char * pszLayerName,
         poLayer->SetDeferedSpatialIndexCreation(TRUE);
     }
 
-    if( OGR_GT_IsNonLinear( eGType ) )
-        poLayer->CreateGeometryExtensionIfNecessary(eGType);
     poLayer->SetPrecisionFlag( CSLFetchBoolean(papszOptions,"PRECISION",TRUE));
     poLayer->SetTruncateFieldsFlag( CSLFetchBoolean(papszOptions,"TRUNCATE_FIELDS",FALSE));
 
@@ -3482,7 +3487,7 @@ int GDALGeoPackageDataset::TestCapability( const char * pszCap )
     }
     else if( EQUAL(pszCap,ODsCCurveGeometries) )
         return TRUE;
-    return FALSE;
+    return OGRSQLiteBaseDataSource::TestCapability(pszCap);
 }
 
 /************************************************************************/
@@ -3501,9 +3506,11 @@ OGRLayer * GDALGeoPackageDataset::ExecuteSQL( const char *pszSQLCommand,
 
 {
     m_bHasReadMetadataFromStorage = FALSE;
+
     FlushMetadata();
     for( int i = 0; i < m_nLayers; i++ )
     {
+        m_papoLayers[i]->RunDeferredCreationIfNecessary();
         m_papoLayers[i]->CreateSpatialIndexIfNecessary();
     }
 
@@ -4309,3 +4316,59 @@ std::pair<OGRLayer*, IOGRSQLiteGetSpatialWhere*>
     OGRGeoPackageLayer* poRet = (OGRGeoPackageLayer*) GetLayerByName(pszName);
     return std::pair<OGRLayer*, IOGRSQLiteGetSpatialWhere*>(poRet, poRet);
 }
+
+/************************************************************************/
+/*                       CommitTransaction()                        */
+/************************************************************************/
+
+OGRErr GDALGeoPackageDataset::CommitTransaction()
+
+{
+    if( nSoftTransactionLevel == 1 )
+    {
+        FlushMetadata();
+        for( int i = 0; i < m_nLayers; i++ )
+        {
+            m_papoLayers[i]->RunDeferredCreationIfNecessary();
+        }
+    }
+
+    return OGRSQLiteBaseDataSource::CommitTransaction();
+}
+
+/************************************************************************/
+/*                     RollbackTransaction()                            */
+/************************************************************************/
+
+OGRErr GDALGeoPackageDataset::RollbackTransaction()
+
+{
+    if( nSoftTransactionLevel == 1 )
+    {
+        FlushMetadata();
+        for( int i = 0; i < m_nLayers; i++ )
+        {
+            m_papoLayers[i]->RunDeferredCreationIfNecessary();
+            m_papoLayers[i]->CreateSpatialIndexIfNecessary();
+            m_papoLayers[i]->ResetReading();
+        }
+    }
+
+    return OGRSQLiteBaseDataSource::RollbackTransaction();
+}
+
+/************************************************************************/
+/*                       GetGeometryTypeString()                        */
+/************************************************************************/
+
+const char* GDALGeoPackageDataset::GetGeometryTypeString(OGRwkbGeometryType eType)
+{
+    const char* pszGPKGGeomType = OGRToOGCGeomType(eType);
+    if( EQUAL(pszGPKGGeomType, "GEOMETRYCOLLECTION") &&
+        CSLTestBoolean(CPLGetConfigOption("OGR_GPKG_GEOMCOLLECTION", "YES")) )
+    {
+        pszGPKGGeomType = "GEOMCOLLECTION";
+    }
+    return pszGPKGGeomType;
+}
+

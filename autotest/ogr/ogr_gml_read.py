@@ -32,15 +32,14 @@
 
 import os
 import sys
-import string
 
 sys.path.append( '../pymod' )
 
 import gdaltest
 import ogrtest
+from osgeo import gdal
 from osgeo import ogr
 from osgeo import osr
-from osgeo import gdal
 import shutil
 
 ###############################################################################
@@ -586,7 +585,7 @@ def ogr_gml_14():
     gdal.SetConfigOption( 'GML_SKIP_RESOLVE_ELEMS', 'gml:directedNode' )
     gdal.SetConfigOption( 'GML_SAVE_RESOLVED_TO', 'tmp/cache/xlink2resolved.gml' )
     gml_ds = ogr.Open( 'tmp/cache/xlink1.gml' )
-    gml_ds = None
+    del gml_ds
     gdal.SetConfigOption( 'GML_SKIP_RESOLVE_ELEMS', None )
     gdal.SetConfigOption( 'GML_SAVE_RESOLVED_TO', None )
 
@@ -783,7 +782,7 @@ def ogr_gml_20():
 
     idx = ldefn.GetFieldIndex("cat")
     fddefn = ldefn.GetFieldDefn(idx)
-    if fddefn.GetFieldTypeName(fddefn.GetType()) != 'Integer':
+    if fddefn.GetFieldTypeName(fddefn.GetType()) != 'Integer64':
         gdaltest.post_reason('did not get expected column type for col "cat"')
         return 'fail'
     idx = ldefn.GetFieldIndex("str1")
@@ -2871,53 +2870,48 @@ def ogr_gml_62():
         os.unlink('tmp/gmlattributes.gfs')
     except:
         pass
-    gdal.SetConfigOption('GML_ATTRIBUTES_TO_OGR_FIELDS', 'YES')
-    ds = ogr.Open('tmp/gmlattributes.gml')
-    gdal.SetConfigOption('GML_ATTRIBUTES_TO_OGR_FIELDS', None)
-    lyr = ds.GetLayer(0)
-    if lyr.GetLayerDefn().GetFieldCount() != 4:
-        gdaltest.post_reason('fail')
-        return 'fail'
-    feat = lyr.GetNextFeature()
-    if feat.GetField('element_attr1') != '1' or \
-       feat.GetField('element2_attr1') != 'a' or \
-       feat.GetField('element2') != 'foo' or \
-       feat.IsFieldSet('element3_attr1') :
-        gdaltest.post_reason('fail')
-        feat.DumpReadable()
-        return 'fail'
-    feat = lyr.GetNextFeature()
-    if feat.IsFieldSet('element_attr1') or \
-       feat.IsFieldSet('element2_attr1') or \
-       feat.IsFieldSet('element2') or \
-       feat.GetField('element3_attr1') != 1:
-        gdaltest.post_reason('fail')
-        feat.DumpReadable()
-        return 'fail'
-    feat = lyr.GetNextFeature()
-    if feat.GetField('element_attr1') != 'a' or \
-       feat.IsFieldSet('element2_attr1') or \
-       feat.IsFieldSet('element2') or \
-       feat.IsFieldSet('element3_attr1') :
-        gdaltest.post_reason('fail')
-        feat.DumpReadable()
-        return 'fail'
-    feat = None
-    ds = None
 
-    # Retry now that the .gfs exists
-    ds = ogr.Open('tmp/gmlattributes.gml')
-    lyr = ds.GetLayer(0)
-    feat = lyr.GetNextFeature()
-    if feat.GetField('element_attr1') != '1' or \
-       feat.GetField('element2_attr1') != 'a' or \
-       feat.GetField('element2') != 'foo' or \
-       feat.IsFieldSet('element3_attr1') :
-        gdaltest.post_reason('fail')
-        feat.DumpReadable()
-        return 'fail'
-    feat = None
-    ds = None
+    # Without and then with .gfs
+    for i in range(2):
+        if i == 0:
+            gdal.SetConfigOption('GML_ATTRIBUTES_TO_OGR_FIELDS', 'YES')
+        ds = ogr.Open('tmp/gmlattributes.gml')
+        if i == 0:
+            gdal.SetConfigOption('GML_ATTRIBUTES_TO_OGR_FIELDS', None)
+        lyr = ds.GetLayer(0)
+        if lyr.GetLayerDefn().GetFieldCount() != 4:
+            gdaltest.post_reason('fail')
+            print(i)
+            return 'fail'
+        feat = lyr.GetNextFeature()
+        if feat.GetField('element_attr1') != '1' or \
+        feat.GetField('element2_attr1') != 'a' or \
+        feat.GetField('element2') != 'foo' or \
+        feat.IsFieldSet('element3_attr1') :
+            gdaltest.post_reason('fail')
+            feat.DumpReadable()
+            print(i)
+            return 'fail'
+        feat = lyr.GetNextFeature()
+        if feat.IsFieldSet('element_attr1') or \
+        feat.IsFieldSet('element2_attr1') or \
+        feat.IsFieldSet('element2') or \
+        feat.GetField('element3_attr1') != 1:
+            gdaltest.post_reason('fail')
+            feat.DumpReadable()
+            print(i)
+            return 'fail'
+        feat = lyr.GetNextFeature()
+        if feat.GetField('element_attr1') != 'a' or \
+        feat.IsFieldSet('element2_attr1') or \
+        feat.IsFieldSet('element2') or \
+        feat.IsFieldSet('element3_attr1') :
+            gdaltest.post_reason('fail')
+            feat.DumpReadable()
+            print(i)
+            return 'fail'
+        feat = None
+        ds = None
 
     return 'success'
 
@@ -3379,7 +3373,7 @@ def ogr_gml_66():
     return 'success'
 
 ###############################################################################
-# Test boolean and int16 type
+# Test boolean, int16, integer64 type
 
 def ogr_gml_67():
 
@@ -3404,12 +3398,24 @@ def ogr_gml_67():
     fld_defn = ogr.FieldDefn('float', ogr.OFTReal)
     fld_defn.SetSubType(ogr.OFSTFloat32)
     lyr.CreateField(fld_defn)
+    fld_defn = ogr.FieldDefn('int64', ogr.OFTInteger64)
+    lyr.CreateField(fld_defn)
+    fld_defn = ogr.FieldDefn('int64list', ogr.OFTInteger64List)
+    lyr.CreateField(fld_defn)
     f = ogr.Feature(lyr.GetLayerDefn())
     f.SetField(0, 1)
     f.SetField(1, 0)
     f.SetFieldIntegerList(2, [1,0])
     f.SetField(3, -32768)
     f.SetField(4, 1.23)
+    f.SetField(5, 1)
+    f.SetFieldInteger64List(6, [1])
+    lyr.CreateFeature(f)
+    
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetFID(1234567890123)
+    f.SetField(5, 1234567890123)
+    f.SetFieldInteger64List(6, [1, 1234567890123])
     lyr.CreateFeature(f)
     f = None
 
@@ -3442,8 +3448,22 @@ def ogr_gml_67():
                 print(i)
                 gdaltest.post_reason('fail')
                 return 'fail'
+        if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('int64')).GetType() != ogr.OFTInteger64:
+            print(i)
+            gdaltest.post_reason('fail')
+            return 'fail'
+        if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('int64list')).GetType() != ogr.OFTInteger64List:
+            print(i)
+            gdaltest.post_reason('fail')
+            return 'fail'
         f = lyr.GetNextFeature()
         if f.GetField('b1') != 1 or f.GetField('b2') != 0 or f.GetFieldAsString('bool_list') != '(2:1,0)' or f.GetField('short') != -32768 or f.GetField('float') != 1.23:
+            print(i)
+            gdaltest.post_reason('fail')
+            f.DumpReadable()
+            return 'fail'
+        f = lyr.GetNextFeature()
+        if f.GetFID() != 1234567890123 or f.GetField('int64') != 1234567890123 or f.GetField('int64list') != [1, 1234567890123]:
             print(i)
             gdaltest.post_reason('fail')
             f.DumpReadable()
@@ -3484,6 +3504,390 @@ def ogr_gml_68():
             return 'fail'
 
     ds = None
+
+    return 'success'
+
+###############################################################################
+# Test not nullable fields
+
+def ogr_gml_69():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    ds = ogr.GetDriverByName('GML').CreateDataSource('/vsimem/ogr_gml_69.gml')
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone)
+    field_defn = ogr.FieldDefn('field_not_nullable', ogr.OFTString)
+    field_defn.SetNullable(0)
+    lyr.CreateField(field_defn)
+    field_defn = ogr.FieldDefn('field_nullable', ogr.OFTString)
+    lyr.CreateField(field_defn)
+    field_defn = ogr.GeomFieldDefn('geomfield_not_nullable', ogr.wkbPoint)
+    field_defn.SetNullable(0)
+    lyr.CreateGeomField(field_defn)
+    field_defn = ogr.GeomFieldDefn('geomfield_nullable', ogr.wkbPoint)
+    lyr.CreateGeomField(field_defn)
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    f.SetGeomFieldDirectly('geomfield_not_nullable', ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    lyr.CreateFeature(f)
+    f = None
+    
+    # Error case: missing geometry
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField('field_not_nullable', 'not_null')
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+    
+    # Error case: missing non-nullable field
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    gdal.PushErrorHandler()
+    ret = lyr.CreateFeature(f)
+    gdal.PopErrorHandler()
+    if ret == 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    f = None
+
+    ds = None
+
+    ds = ogr.Open('/vsimem/ogr_gml_69.gml')
+    lyr = ds.GetLayerByName('test')
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_not_nullable')).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('field_nullable')).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(lyr.GetLayerDefn().GetGeomFieldIndex('geomfield_not_nullable')).IsNullable() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetGeomFieldDefn(lyr.GetLayerDefn().GetGeomFieldIndex('geomfield_nullable')).IsNullable() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    gdal.Unlink("/vsimem/ogr_gml_69.gml")
+    gdal.Unlink("/vsimem/ogr_gml_69.xsd")
+
+    return 'success'
+
+###############################################################################
+# Test default fields (not really supported, but we must do something as we
+# support not nullable fields)
+
+def ogr_gml_70():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    ds = ogr.GetDriverByName('GML').CreateDataSource('/vsimem/ogr_gml_70.gml')
+    lyr = ds.CreateLayer('test', geom_type = ogr.wkbNone)
+    
+    field_defn = ogr.FieldDefn( 'field_string', ogr.OFTString )
+    field_defn.SetDefault("'a'")
+    field_defn.SetNullable(0)
+    lyr.CreateField(field_defn)
+
+    f = ogr.Feature(lyr.GetLayerDefn())
+    lyr.CreateFeature(f)
+    f = None
+
+    ds = None
+
+    ds = ogr.Open('/vsimem/ogr_gml_70.gml')
+    lyr = ds.GetLayerByName('test')
+    f = lyr.GetNextFeature()
+    if f.GetField('field_string') != 'a':
+        gdaltest.post_reason('fail')
+        f.DumpReadable()
+        return 'fail'
+    ds = None
+    
+    gdal.Unlink("/vsimem/ogr_gml_70.gml")
+    gdal.Unlink("/vsimem/ogr_gml_70.xsd")
+
+    return 'success'
+
+###############################################################################
+# Test reading WFS 2.0 layer resulting from a join operation
+
+def ogr_gml_71_helper(ds):
+
+    if ds.GetLayerCount() != 1:
+        gdaltest.post_reason('fail')
+        print(ds.GetLayerCount())
+        return 'fail'
+    lyr = ds.GetLayer(0)
+    if lyr.GetName() != 'join_table1_table2':
+        gdaltest.post_reason('fail')
+        print(lyr.GetName())
+        return 'fail'
+    fields = [ ('table1.gml_id', ogr.OFTString),
+               ('table1.foo', ogr.OFTInteger),
+               ('table1.bar', ogr.OFTInteger),
+               ('table2.gml_id', ogr.OFTString),
+               ('table2.bar', ogr.OFTInteger),
+               ('table2.baz', ogr.OFTString) ]
+    layer_defn = lyr.GetLayerDefn()
+    if layer_defn.GetFieldCount() != len(fields):
+        gdaltest.post_reason('fail')
+        print(layer_defn.GetFieldCount())
+        return 'fail'
+    for i in range(len(fields)):
+        fld_defn = layer_defn.GetFieldDefn(i)
+        if fld_defn.GetName() != fields[i][0]:
+            gdaltest.post_reason('fail')
+            print(i)
+            print(fld_defn.GetName())
+            return 'fail'
+        if fld_defn.GetType() != fields[i][1]:
+            gdaltest.post_reason('fail')
+            print(i)
+            print(fld_defn.GetType())
+            return 'fail'
+    if layer_defn.GetGeomFieldCount() != 2:
+        gdaltest.post_reason('fail')
+        print(layer_defn.GetGeomFieldCount())
+        return 'fail'
+    if layer_defn.GetGeomFieldDefn(0).GetName() != 'table1.geometry':
+        gdaltest.post_reason('fail')
+        print(layer_defn.GetGeomFieldDefn(0).GetName())
+        return 'fail'
+    if layer_defn.GetGeomFieldDefn(1).GetName() != 'table2.geometry':
+        gdaltest.post_reason('fail')
+        print(layer_defn.GetGeomFieldDefn(1).GetName())
+        return 'fail'
+    f = lyr.GetNextFeature()
+    if f.GetField('table1.gml_id') != 'table1-1' or \
+       f.GetField('table1.foo') != 1 or \
+       f.IsFieldSet('table1.bar') or \
+       f.GetField('table2.gml_id') != 'table2-1' or \
+       f.GetField('table2.bar') != 2 or \
+       f.GetField('table2.baz') != 'foo' or \
+       f.GetGeomFieldRef(0) is not None or \
+       f.GetGeomFieldRef(1).ExportToWkt() != 'POINT (2 49)':
+            gdaltest.post_reason('fail')
+            f.DumpReadable()
+            return 'fail'
+    f = lyr.GetNextFeature()
+    if f.GetField('table1.gml_id') != 'table1-2' or \
+       f.IsFieldSet('table1.foo') or \
+       f.GetField('table1.bar') != 2 or \
+       f.GetField('table2.gml_id') != 'table2-2' or \
+       f.GetField('table2.bar') != 2 or \
+       f.GetField('table2.baz') != 'bar' or \
+       f.GetGeomFieldRef(0).ExportToWkt() != 'POINT (3 50)' or \
+       f.GetGeomFieldRef(1).ExportToWkt() != 'POINT (2 50)':
+            gdaltest.post_reason('fail')
+            f.DumpReadable()
+            return 'fail'
+
+    return 'success'
+
+def ogr_gml_71():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    # With .xsd
+    try:
+        os.unlink('data/wfsjointlayer.gfs')
+    except:
+        pass
+    ds = ogr.Open('data/wfsjointlayer.gml')
+    if ogr_gml_71_helper(ds) != 'success':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    try:
+        os.unlink('data/wfsjointlayer.gfs')
+        gdaltest.post_reason('fail')
+        return 'fail'
+    except:
+        pass
+
+    # With .xsd but that is only partially understood
+    ds = gdal.OpenEx('data/wfsjointlayer.gml', open_options = ['XSD=data/wfsjointlayer_not_understood.xsd'])
+    if ogr_gml_71_helper(ds) != 'success':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    try:
+        os.unlink('data/wfsjointlayer.gfs')
+    except:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # Without .xsd nor .gfs
+    shutil.copy('data/wfsjointlayer.gml', 'tmp/wfsjointlayer.gml')
+    try:
+        os.unlink('tmp/wfsjointlayer.gfs')
+    except:
+        pass
+    ds = ogr.Open('tmp/wfsjointlayer.gml')
+    if ogr_gml_71_helper(ds) != 'success':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+    
+    try:
+        os.stat('tmp/wfsjointlayer.gfs')
+    except:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    # With .gfs
+    ds = ogr.Open('tmp/wfsjointlayer.gml')
+    if ogr_gml_71_helper(ds) != 'success':
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    return 'success'
+
+###############################################################################
+# Test name and description
+
+def ogr_gml_72():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    ds = ogr.GetDriverByName('GML').CreateDataSource('/vsimem/ogr_gml_72.gml', options = ['NAME=name', 'DESCRIPTION=description'])
+    ds.SetMetadata({ 'NAME': 'ignored', 'DESCRIPTION': 'ignored' })
+    ds = None
+    
+    ds = ogr.Open('/vsimem/ogr_gml_72.gml')
+    if ds.GetMetadata() != { 'NAME': 'name', 'DESCRIPTION': 'description' }:
+        gdaltest.post_reason('fail')
+        print(ds.GetMetadata())
+        return 'fail'
+    ds = None
+
+    gdal.Unlink("/vsimem/ogr_gml_72.gml")
+    gdal.Unlink("/vsimem/ogr_gml_72.xsd")
+
+    ds = ogr.GetDriverByName('GML').CreateDataSource('/vsimem/ogr_gml_72.gml')
+    ds.SetMetadata({'NAME': 'name', 'DESCRIPTION': 'description' })
+    ds = None
+    
+    ds = ogr.Open('/vsimem/ogr_gml_72.gml')
+    if ds.GetMetadata() != { 'NAME': 'name', 'DESCRIPTION': 'description' }:
+        gdaltest.post_reason('fail')
+        print(ds.GetMetadata())
+        return 'fail'
+    ds = None
+
+    gdal.Unlink("/vsimem/ogr_gml_72.gml")
+    gdal.Unlink("/vsimem/ogr_gml_72.xsd")
+
+    return 'success'
+
+###############################################################################
+# Read a CSW GetRecordsResponse document
+
+def ogr_gml_73():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    try:
+        os.remove( 'data/cswresults.gfs' )
+    except:
+        pass
+
+    ds = ogr.Open('data/cswresults.xml')
+    for i in range(3):
+        lyr = ds.GetLayer(i)
+        sr = lyr.GetSpatialRef()
+        got_wkt = sr.ExportToWkt()
+        if got_wkt.find('4326') < 0:
+            gdaltest.post_reason('did not get expected SRS')
+            print(got_wkt)
+            return 'fail'
+
+        feat = lyr.GetNextFeature()
+        geom = feat.GetGeometryRef()
+        got_wkt = geom.ExportToWkt()
+        if got_wkt != 'POLYGON ((-180 -90,-180 90,180 90,180 -90,-180 -90))':
+            gdaltest.post_reason('did not get expected geometry')
+            print(got_wkt)
+            return 'fail'
+
+    ds = None
+
+    try:
+        os.remove( 'data/cswresults.gfs' )
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Test FORCE_SRS_DETECTION open option
+
+def ogr_gml_74():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+
+    ds = gdal.OpenEx('data/expected_gml_gml32.gml', open_options = ['FORCE_SRS_DETECTION=YES'] )
+    lyr = ds.GetLayer(0)
+    if lyr.GetSpatialRef() is None:
+        gdaltest.post_reason('did not get expected SRS')
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test we don't open a WMTS Capabilities doc
+
+def ogr_gml_75():
+
+    if not gdaltest.have_gml_reader:
+        return 'skip'
+        
+    gdal.FileFromMemBuffer("/vsimem/ogr_gml_75.xml",
+    """<?xml version="1.0" encoding="UTF-8"?>
+<Capabilities xmlns="http://www.opengis.net/wmts/1.0"
+xmlns:ows="http://www.opengis.net/ows/1.1"
+xmlns:xlink="http://www.w3.org/1999/xlink"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xmlns:gml="http://www.opengis.net/gml"
+xsi:schemaLocation="http://www.opengis.net/wmts/1.0 http://somewhere"
+version="1.0.0">
+        <ows:OperationsMetadata>
+                <ows:Operation name="GetCapabilities">
+                        <ows:DCP>
+                                <ows:HTTP>
+                                        <ows:Get xlink:href="http://foo"/>
+                                </ows:HTTP>
+                        </ows:DCP>
+                </ows:Operation>
+                <ows:Operation name="GetTile">
+                        <ows:DCP>
+                                <ows:HTTP>
+                                        <ows:Get xlink:href="http://foo"/>
+                                </ows:HTTP>
+                        </ows:DCP>
+                </ows:Operation>
+        </ows:OperationsMetadata>
+</Capabilities>""")
+
+    ds = ogr.Open('/vsimem/ogr_gml_75.xml')
+    if ds is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    gdal.Unlink('/vsimem/ogr_gml_75.xml')
 
     return 'success'
 
@@ -3687,13 +4091,20 @@ gdaltest_list = [
     ogr_gml_66,
     ogr_gml_67,
     ogr_gml_68,
+    ogr_gml_69,
+    ogr_gml_70,
+    ogr_gml_71,
+    ogr_gml_72,
+    ogr_gml_73,
+    ogr_gml_74,
+    ogr_gml_75,
     ogr_gml_cleanup ]
 
-#gdaltest_list = [ 
-#    ogr_gml_clean_files,
-#    ogr_gml_1,
-#    ogr_gml_66,
-#    ogr_gml_cleanup ]
+disabled_gdaltest_list = [ 
+    ogr_gml_clean_files,
+    ogr_gml_1,
+    ogr_gml_71,
+    ogr_gml_cleanup ]
 
 if __name__ == '__main__':
 

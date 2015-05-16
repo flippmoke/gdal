@@ -3,7 +3,8 @@ OBJ	=	ogrsfdriverregistrar.obj ogrlayer.obj ogr_gensql.obj \
 		ogrdatasource.obj ogrsfdriver.obj ogrregisterall.obj \
 		ogr_attrind.obj ogr_miattrind.obj ogrlayerdecorator.obj \
 		ogrwarpedlayer.obj ogrunionlayer.obj ogrlayerpool.obj \
-		ogrmutexedlayer.obj ogrmutexeddatasource.obj
+		ogrmutexedlayer.obj ogrmutexeddatasource.obj \
+		ogremulatedtransaction.obj
 
 
 GDAL_ROOT	=	..\..\..
@@ -19,7 +20,7 @@ EXTRAFLAGS =	-I.. -I..\.. $(OGDIDEF) $(FMEDEF) $(OCIDEF) $(PGDEF) \
 		$(SDEDEF) $(BASEFORMATS) $(IDBDEF) $(NASDEF) $(DODSDEF) \
 		$(LIBKMLDEF) $(WFSDEF) $(SOSIDEF) $(GFTDEF) \
 		$(COUCHDBDEF) $(CLOUDANTDEF) $(FGDBDEF) $(XLSDEF) $(ODSDEF) $(XLSXDEF) $(INGRESDEF) \
-		$(ELASTICDEF) $(OSMDEF) $(VFKDEF) $(CARTODBDEF) $(GMEDEF)
+		$(ELASTICDEF) $(OSMDEF) $(VFKDEF) $(CARTODBDEF) $(GMEDEF) $(PLSCENESDEF) $(CSWDEF)
 
 !IFDEF OGDIDIR
 OGDIDEF	=	-DOGDI_ENABLED
@@ -95,6 +96,7 @@ LIBKMLDEF = -DLIBKML_ENABLED
 
 !IFDEF CURL_LIB
 WFSDEF = -DWFS_ENABLED
+CSWDEF = -DCSW_ENABLED
 !ENDIF
 
 !IFDEF SOSI_ENABLED
@@ -146,6 +148,10 @@ CARTODBDEF = -DCARTODB_ENABLED
 
 !IFDEF CURL_LIB
 GMEDEF = -DGME_ENABLED
+!ENDIF
+
+!IFDEF CURL_LIB
+PLSCENESDEF = -DPLSCENES_ENABLED
 !ENDIF
 
 !ELSE

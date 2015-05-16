@@ -1106,9 +1106,12 @@ static const char* CPLvsnprintf_get_end_of_formatting(const char* fmt)
     for( ; (ch = *fmt) != '\0'; fmt ++ )
     {
         if( ch == 'h' || ch == 'l' || ch == 'j' || ch == 'z' ||
-            ch == 't' || ch == 'L' || ch == 'I' ) /* for I64 */
+            ch == 't' || ch == 'L' )
             continue;
-        return fmt;
+        else if( ch == 'I' && fmt[1] == '6' && fmt[2] == '4' )
+            fmt += 2;
+        else
+            return fmt;
     }
 
     return NULL;
@@ -2020,6 +2023,22 @@ char *CPLEscapeString( const char *pszInput, int nLength,
                 pszOutput[iOut++] = 't';
                 pszOutput[iOut++] = ';';
             }
+            /* Python 2 doesn't like displaying the UTF-8 character corresponding */
+            /* to BOM, so escape it */
+            else if( ((GByte*)pszInput)[iIn] == 0xEF &&
+                     ((GByte*)pszInput)[iIn+1] == 0xBB &&
+                     ((GByte*)pszInput)[iIn+2] == 0xBF )
+            {
+                pszOutput[iOut++] = '&';
+                pszOutput[iOut++] = '#';
+                pszOutput[iOut++] = 'x';
+                pszOutput[iOut++] = 'F';
+                pszOutput[iOut++] = 'E';
+                pszOutput[iOut++] = 'F';
+                pszOutput[iOut++] = 'F';
+                pszOutput[iOut++] = ';';
+                iIn += 2;
+            }
             else if( ((GByte*)pszInput)[iIn] < 0x20 
                      && pszInput[iIn] != 0x9
                      && pszInput[iIn] != 0xA 
@@ -2168,7 +2187,7 @@ char *CPLUnescapeString( const char *pszInput, int *pnLength, int nScheme )
                     ch = pszInput[iIn ++];
                     if (ch >= 'a' && ch <= 'f')
                         anVal[0] = anVal[0] * 16 + ch - 'a' + 10;
-                    else if (ch >= 'A' && ch <= 'A')
+                    else if (ch >= 'A' && ch <= 'F')
                         anVal[0] = anVal[0] * 16 + ch - 'A' + 10;
                     else if (ch >= '0' && ch <= '9')
                         anVal[0] = anVal[0] * 16 + ch - '0';

@@ -120,6 +120,7 @@ void CPL_DLL GDALRegister_DIPEx(void);
 void CPL_DLL GDALRegister_ISIS3(void);
 void CPL_DLL GDALRegister_ISIS2(void);
 void CPL_DLL GDALRegister_PDS(void);
+void CPL_DLL GDALRegister_VICAR(void);
 void CPL_DLL GDALRegister_IDRISI(void);
 void CPL_DLL GDALRegister_Terragen(void);
 void CPL_DLL GDALRegister_WCS(void);
@@ -180,6 +181,7 @@ void CPL_DLL GDALRegister_IRIS(void);
 void CPL_DLL GDALRegister_KRO(void);
 void CPL_DLL GDALRegister_KEA(void);
 void CPL_DLL GDALRegister_ROIPAC(void);
+void CPL_DLL GDALRegister_PLMOSAIC(void);
 CPL_C_END
 
 #endif /* ndef GDAL_FRMTS_H_INCLUDED */

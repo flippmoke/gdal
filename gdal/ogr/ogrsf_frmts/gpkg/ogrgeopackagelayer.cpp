@@ -30,6 +30,7 @@
 
 #include "ogr_geopackage.h"
 #include "ogrgeopackageutility.h"
+#include "ogr_p.h"
 
 /************************************************************************/
 /*                      OGRGeoPackageLayer()                            */
@@ -191,7 +192,12 @@ OGRFeature *OGRGeoPackageLayer::TranslateFeature( sqlite3_stmt* hStmt )
             OGRGeometry *poGeom = GPkgGeometryToOGR(pabyGpkg, iGpkgSize, poSrs);
             if ( ! poGeom )
             {
-                CPLError( CE_Failure, CPLE_AppDefined, "Unable to read geometry");
+                // Try also spatialite geometry blobs
+                if( OGRSQLiteLayer::ImportSpatiaLiteGeometry( pabyGpkg, iGpkgSize,
+                                                              &poGeom ) != OGRERR_NONE )
+                {
+                    CPLError( CE_Failure, CPLE_AppDefined, "Unable to read geometry");
+                }
             }
             poFeature->SetGeometryDirectly( poGeom );
         }
@@ -214,9 +220,13 @@ OGRFeature *OGRGeoPackageLayer::TranslateFeature( sqlite3_stmt* hStmt )
         switch( poFieldDefn->GetType() )
         {
             case OFTInteger:
-                //FIXME use int64 when OGR has 64bit integer support
                 poFeature->SetField( iField, 
                     sqlite3_column_int( hStmt, iRawField ) );
+                break;
+
+            case OFTInteger64:
+                poFeature->SetField( iField, 
+                    sqlite3_column_int64( hStmt, iRawField ) );
                 break;
 
             case OFTReal:
@@ -245,12 +255,9 @@ OGRFeature *OGRGeoPackageLayer::TranslateFeature( sqlite3_stmt* hStmt )
             case OFTDateTime:
             {
                 const char* pszTxt = (const char*)sqlite3_column_text( hStmt, iRawField );
-                int nYear, nMonth, nDay, nHour, nMinute;
-                float fSecond;
-                if( sscanf(pszTxt, "%d-%d-%dT%d:%d:%fZ", &nYear, &nMonth, &nDay,
-                                            &nHour, &nMinute, &fSecond) == 6 )
-                    poFeature->SetField(iField, nYear, nMonth, nDay,
-                                        nHour, nMinute, (int)(fSecond + 0.5), 0);
+                OGRField sField;
+                if( OGRParseXMLDateTime(pszTxt, &sField) )
+                    poFeature->SetField(iField, &sField);
                 break;
             }
 
@@ -349,8 +356,11 @@ void OGRGeoPackageLayer::BuildFeatureDefn( const char *pszLayerName,
             const int nBytes = sqlite3_column_bytes( hStmt, iCol );
             if( nBytes > 4 )
             {
+                int iGpkgSize = sqlite3_column_bytes(hStmt, iCol);
                 const GByte* pabyGpkg = (const GByte*)sqlite3_column_blob( hStmt, iCol  );
                 GPkgHeader oHeader;
+                OGRGeometry* poGeom = NULL;
+                int nSRID;
                 if( GPkgHeaderFromWKB(pabyGpkg, &oHeader) == OGRERR_NONE )
                 {
                     OGRGeomFieldDefn oGeomField(oField.GetNameRef(), wkbUnknown);
@@ -388,13 +398,42 @@ void OGRGeoPackageLayer::BuildFeatureDefn( const char *pszLayerName,
                     iGeomCol = iCol;
                     continue;
                 }
+
+                // Try also spatialite geometry blobs
+                else if( OGRSQLiteLayer::ImportSpatiaLiteGeometry( pabyGpkg, iGpkgSize,
+                                                                   &poGeom, &nSRID ) == OGRERR_NONE )
+                {
+                    OGRGeomFieldDefn oGeomField(oField.GetNameRef(), wkbUnknown);
+
+                    /* Read the SRS */
+                    OGRSpatialReference *poSRS = m_poDS->GetSpatialRef(nSRID);
+                    if ( poSRS )
+                    {
+                        oGeomField.SetSpatialRef(poSRS);
+                        poSRS->Dereference();
+                    }
+                    delete poGeom;
+
+                    m_poFeatureDefn->AddGeomFieldDefn(&oGeomField);
+                    iGeomCol = iCol;
+                    continue;
+                }
             }
         }
 
         switch( nColType )
         {
           case SQLITE_INTEGER:
-            oField.SetType( OFTInteger );
+            if( CSLTestBoolean(CPLGetConfigOption("OGR_PROMOTE_TO_INTEGER64", "FALSE")) )
+                oField.SetType( OFTInteger64 );
+            else
+            {
+                GIntBig nVal = sqlite3_column_int64(hStmt, iCol);
+                if( (GIntBig)(int)nVal == nVal )
+                    oField.SetType( OFTInteger );
+                else
+                    oField.SetType( OFTInteger64 );
+            }
             break;
 
           case SQLITE_FLOAT:

@@ -494,6 +494,8 @@ CPLErr VRTSimpleSource::XMLInit( CPLXMLNode *psSrc, const char *pszVRTPath )
     }
 
     char** papszOpenOptions = GDALDeserializeOpenOptionsFromXML(psSrc);
+    if( strstr(pszSrcDSName,"<VRTDataset") != NULL )
+        papszOpenOptions = CSLSetNameValue(papszOpenOptions, "ROOT_PATH", pszVRTPath);
 
     GDALDataset *poSrcDS;
     if (nRasterXSize == 0 || nRasterYSize == 0 || eDataType == (GDALDataType)-1 ||
@@ -876,7 +878,7 @@ VRTSimpleSource::GetSrcDstWindow( int nXOff, int nYOff, int nXSize, int nYSize,
         dfScaleWinToBufX = nBufXSize / (double) nXSize;
 
         *pnOutXOff = (int) ((dfDstULX - nXOff) * dfScaleWinToBufX+0.001);
-        *pnOutXSize = (int) ((dfDstLRX - nXOff) * dfScaleWinToBufX+0.001) 
+        *pnOutXSize = (int) ((dfDstLRX - nXOff) * dfScaleWinToBufX+0.5) 
             - *pnOutXOff;
 
         *pnOutXOff = MAX(0,*pnOutXOff);
@@ -889,7 +891,7 @@ VRTSimpleSource::GetSrcDstWindow( int nXOff, int nYOff, int nXSize, int nYSize,
         dfScaleWinToBufY = nBufYSize / (double) nYSize;
 
         *pnOutYOff = (int) ((dfDstULY - nYOff) * dfScaleWinToBufY+0.001);
-        *pnOutYSize = (int) ((dfDstLRY - nYOff) * dfScaleWinToBufY+0.001) 
+        *pnOutYSize = (int) ((dfDstLRY - nYOff) * dfScaleWinToBufY+0.5) 
             - *pnOutYOff;
 
         *pnOutYOff = MAX(0,*pnOutYOff);
@@ -1097,7 +1099,7 @@ CPLErr VRTSimpleSource::ComputeStatistics( int nXSize, int nYSize,
 
 CPLErr VRTSimpleSource::GetHistogram( int nXSize, int nYSize,
                                   double dfMin, double dfMax,
-                                  int nBuckets, int * panHistogram,
+                                  int nBuckets, GUIntBig * panHistogram,
                                   int bIncludeOutOfRange, int bApproxOK,
                                   GDALProgressFunc pfnProgress, void *pProgressData )
 {
@@ -1284,11 +1286,26 @@ VRTAveragedSource::RasterIO( int nXOff, int nYOff, int nXSize, int nYSize,
 /*      Load it.                                                        */
 /* -------------------------------------------------------------------- */
     CPLErr eErr;
-    
+
+    GDALRIOResampleAlg     eResampleAlgBack = psExtraArg->eResampleAlg;
+    if( osResampling.size() )
+    {
+        psExtraArg->eResampleAlg = GDALRasterIOGetResampleAlg(osResampling);
+    }
+    psExtraArg->bFloatingPointWindowValidity = TRUE;
+    psExtraArg->dfXOff = dfReqXOff;
+    psExtraArg->dfYOff = dfReqYOff;
+    psExtraArg->dfXSize = dfReqXSize;
+    psExtraArg->dfYSize = dfReqYSize;
+
     eErr = poRasterBand->RasterIO( GF_Read, 
                                    nReqXOff, nReqYOff, nReqXSize, nReqYSize,
                                    pafSrc, nReqXSize, nReqYSize, GDT_Float32, 
                                    0, 0, psExtraArg );
+
+    if( osResampling.size() )
+        psExtraArg->eResampleAlg = eResampleAlgBack;
+    psExtraArg->bFloatingPointWindowValidity = FALSE;
 
     if( eErr != CE_None )
     {
@@ -1464,7 +1481,7 @@ CPLErr VRTAveragedSource::GetHistogram( CPL_UNUSED int nXSize,
                                         CPL_UNUSED double dfMin,
                                         CPL_UNUSED double dfMax,
                                         CPL_UNUSED int nBuckets,
-                                        CPL_UNUSED int * panHistogram,
+                                        CPL_UNUSED GUIntBig * panHistogram,
                                         CPL_UNUSED int bIncludeOutOfRange,
                                         CPL_UNUSED int bApproxOK,
                                         CPL_UNUSED GDALProgressFunc pfnProgress,
@@ -1805,13 +1822,30 @@ VRTComplexSource::RasterIO( int nXOff, int nYOff, int nXSize, int nYSize,
                           &nOutXOff, &nOutYOff, &nOutXSize, &nOutYSize ) )
         return CE_None;
 
-    return RasterIOInternal(nReqXOff, nReqYOff, nReqXSize, nReqYSize,
+    GDALRIOResampleAlg     eResampleAlgBack = psExtraArg->eResampleAlg;
+    if( osResampling.size() )
+    {
+        psExtraArg->eResampleAlg = GDALRasterIOGetResampleAlg(osResampling);
+    }
+    psExtraArg->bFloatingPointWindowValidity = TRUE;
+    psExtraArg->dfXOff = dfReqXOff;
+    psExtraArg->dfYOff = dfReqYOff;
+    psExtraArg->dfXSize = dfReqXSize;
+    psExtraArg->dfYSize = dfReqYSize;
+
+    CPLErr eErr = RasterIOInternal(nReqXOff, nReqYOff, nReqXSize, nReqYSize,
                        ((GByte *)pData)
                             + nPixelSpace * nOutXOff
                             + (GPtrDiff_t)nLineSpace * nOutYOff,
                        nOutXSize, nOutYSize,
                        eBufType,
                        nPixelSpace, nLineSpace, psExtraArg );
+
+    if( osResampling.size() )
+        psExtraArg->eResampleAlg = eResampleAlgBack;
+    psExtraArg->bFloatingPointWindowValidity = FALSE;
+
+    return eErr;
 }
 
 /************************************************************************/
@@ -2079,7 +2113,7 @@ CPLErr VRTComplexSource::ComputeRasterMinMax( int nXSize, int nYSize, int bAppro
 
 CPLErr VRTComplexSource::GetHistogram( int nXSize, int nYSize,
                                   double dfMin, double dfMax,
-                                  int nBuckets, int * panHistogram,
+                                  int nBuckets, GUIntBig * panHistogram,
                                   int bIncludeOutOfRange, int bApproxOK,
                                   GDALProgressFunc pfnProgress, void *pProgressData )
 {
@@ -2251,7 +2285,7 @@ CPLErr VRTFuncSource::GetHistogram( CPL_UNUSED int nXSize,
                                     CPL_UNUSED double dfMin,
                                     CPL_UNUSED double dfMax,
                                     CPL_UNUSED int nBuckets,
-                                    CPL_UNUSED int * panHistogram,
+                                    CPL_UNUSED GUIntBig * panHistogram,
                                     CPL_UNUSED int bIncludeOutOfRange,
                                     CPL_UNUSED int bApproxOK,
                                     CPL_UNUSED GDALProgressFunc pfnProgress,

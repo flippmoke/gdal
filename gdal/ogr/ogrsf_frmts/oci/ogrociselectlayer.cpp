@@ -115,6 +115,8 @@ OGROCISelectLayer::ReadTableDefinition( OGROCIStatement *poCommand )
     OGRFeatureDefn *poDefn;
 
     poDefn = poCommand->GetResultDefn();
+    if( iGeomColumn >= 0 )
+        poDefn->SetGeomType(wkbUnknown);
     poDefn->Reference();
 
 /* -------------------------------------------------------------------- */
@@ -126,6 +128,20 @@ OGROCISelectLayer::ReadTableDefinition( OGROCIStatement *poCommand )
     {
         iFIDColumn = poDefn->GetFieldIndex(pszExpectedFIDName);
         pszFIDName = CPLStrdup(poDefn->GetFieldDefn(iFIDColumn)->GetNameRef());
+    }
+
+    if( EQUAL(pszExpectedFIDName, "OGR_FID") && pszFIDName )
+    {
+        for(int i=0;i<poDefn->GetFieldCount();i++)
+        {
+            // This is presumably a Integer since we always create Integer64 with a
+            // defined precision
+            if( poDefn->GetFieldDefn(i)->GetType() == OFTInteger64 &&
+                poDefn->GetFieldDefn(i)->GetWidth() == 0 )
+            {
+                poDefn->GetFieldDefn(i)->SetType(OFTInteger);
+            }
+        }
     }
 
     return poDefn;

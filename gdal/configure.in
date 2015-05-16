@@ -506,6 +506,43 @@ if test "$with_threads" = "yes" -o "$with_threads" = "" ; then
     AC_MSG_RESULT([no])
   ])
 
+
+
+  AC_MSG_CHECKING([for PTHREAD_MUTEX_ADAPTIVE_NP])
+
+  AC_TRY_COMPILE(
+  [
+#define _GNU_SOURCE
+#include <pthread.h>
+  ], [
+    return PTHREAD_MUTEX_ADAPTIVE_NP;
+  ],
+  [
+    AC_MSG_RESULT([yes])
+    AC_DEFINE_UNQUOTED(HAVE_PTHREAD_MUTEX_ADAPTIVE_NP, 1,
+          [Define to 1 if you have the `PTHREAD_MUTEX_ADAPTIVE_NP' constant.])
+  ], [
+    AC_MSG_RESULT([no])
+  ])
+
+  AC_MSG_CHECKING([for pthread_spinlock_t])
+
+  AC_TRY_COMPILE(
+  [
+#define _GNU_SOURCE
+#include <pthread.h>
+  ], [
+    pthread_spinlock_t spin;
+    return 1;
+  ],
+  [
+    AC_MSG_RESULT([yes])
+    AC_DEFINE_UNQUOTED(HAVE_PTHREAD_SPINLOCK, 1,
+          [Define to 1 if you have the `pthread_spinlock_t' type.])
+  ], [
+    AC_MSG_RESULT([no])
+  ])
+
 elif test "$with_threads" != "no" ; then
 
   THREAD_FLAG=CPL_MULTIPROC_PTHREAD
@@ -543,6 +580,26 @@ return (mremap(0,0,0,0,0));
 AC_MSG_RESULT([yes])
 AC_DEFINE_UNQUOTED(HAVE_5ARGS_MREMAP, 1,
         [Define to 1 if you have the 5 args `mremap' function.])
+], [
+AC_MSG_RESULT([no])
+])
+
+dnl ---------------------------------------------------------------------------
+dnl Check if _SC_PHYS_PAGES is available
+dnl ---------------------------------------------------------------------------
+
+AC_MSG_CHECKING([for _SC_PHYS_PAGES])
+
+AC_TRY_COMPILE(
+[
+#include <unistd.h>
+], [
+return (sysconf(_SC_PHYS_PAGES));
+],
+[
+AC_MSG_RESULT([yes])
+AC_DEFINE_UNQUOTED(HAVE_SC_PHYS_PAGES, 1,
+        [Define to 1 if you have the _SC_PHYS_PAGES' constant.])
 ], [
 AC_MSG_RESULT([no])
 ])
@@ -1613,6 +1670,14 @@ dnl Not found... again, with -lsz.
       LIBS="$HDF_LIB_NAME $ORIG_LIBS"
     fi
 
+    dnl HDF4 library newer than 4.2.5 has a SDreset_maxopenfiles/SDget_maxopenfiles interface
+    dnl which allows to open many HDF files simultaneously (the max number of files was previously
+    dnl hardcoded and too low, smth. like 32). Search for it and use if available.
+    AC_CHECK_LIB(mfhdfalt,SDget_maxopenfiles,HDF4_HAS_MAXOPENFILES=yes,HDF4_HAS_MAXOPENFILES=no,$HDF_LIB_NAME)
+    if test "$HDF4_HAS_MAXOPENFILES" = "no" ; then
+      AC_CHECK_LIB(mfhdf,SDget_maxopenfiles,HDF4_HAS_MAXOPENFILES=yes,HDF4_HAS_MAXOPENFILES=no,$HDF_LIB_NAME)
+    fi
+
   dnl Now search for headers
     if test "$with_hdf4" = "yes" -o "$with_hdf4" = "" -a -r /usr/include/hdf/hdf.h ; then
       HDF4_INCLUDE="-I/usr/include/hdf"
@@ -1643,6 +1708,7 @@ fi
 
 AC_SUBST(HAVE_HDF4,$HAVE_HDF4)
 AC_SUBST(HDF4_INCLUDE,$HDF4_INCLUDE)
+AC_SUBST(HDF4_HAS_MAXOPENFILES,$HDF4_HAS_MAXOPENFILES)
 
 if test "$HAVE_HDF4" != "no" ; then
   OPT_GDAL_FORMATS="hdf4 $OPT_GDAL_FORMATS"
@@ -1752,8 +1818,8 @@ else
   fi
 
   HAVE_KEA=yes
-  KEA_LIB="`$KEA_CONFIG --libs`"
-  KEA_INC="`$KEA_CONFIG --cflags`"
+  KEA_LIB="`$KEA_CONFIG --libs --hdflibs`"
+  KEA_INC="`$KEA_CONFIG --cflags --hdfcflags`"
   AC_MSG_RESULT([yes]) 
 fi
 
@@ -2177,8 +2243,7 @@ else
     AC_MSG_RESULT([found Intergraph 5.x+ SDK in ${ECW_LIBDIR}.])
  # ECWJP2 SDK 5.1 style
   elif test -d $with_ecw; then
-    ecw_license_types=( "Desktop_Read-Write" "Server_Read-Only_EndUser" "Server_Read-Only" "Server_Read-Write" "Desktop_Read-Only"   )
-    for ecw_license_type in ${ecw_license_types@<:@@@:>@};
+    for ecw_license_type in "Desktop_Read-Write" "Server_Read-Only_EndUser" "Server_Read-Only" "Server_Read-Write" "Desktop_Read-Only"
       do
         ECW_LIBDIR=$with_ecw/$ecw_license_type/lib/$ECW_ARCH/$ECW_CONF
         if test -r $ECW_LIBDIR/libNCSEcw.a; then
@@ -2856,7 +2921,7 @@ if test "$CURL_SETTING" = "yes" ; then
   
   CURL_INC=`$LIBCURL_CONFIG --cflags`
   CURL_LIB=`$LIBCURL_CONFIG --libs`
-  OPT_GDAL_FORMATS="wcs wms $OPT_GDAL_FORMATS"
+  OPT_GDAL_FORMATS="wcs wms plmosaic $OPT_GDAL_FORMATS"
 
 fi
 
@@ -3928,15 +3993,15 @@ dnl ---------------------------------------------------------------------------
 dnl Ruby bindings.
 dnl ---------------------------------------------------------------------------
 
-AC_ARG_WITH(ruby,[  --with-ruby           Enable Ruby bindings],,)
+dnl AC_ARG_WITH(ruby,[  --with-ruby           Enable Ruby bindings],,)
 
-AC_MSG_CHECKING([for ruby bindings])
-if test "$with_ruby" = "yes" ; then
-  BINDINGS="ruby $BINDINGS"
-  AC_MSG_RESULT([enabled])
-else
-  AC_MSG_RESULT([disabled])
-fi
+dnl AC_MSG_CHECKING([for ruby bindings])
+dnl if test "$with_ruby" = "yes" ; then
+dnl   BINDINGS="ruby $BINDINGS"
+dnl   AC_MSG_RESULT([enabled])
+dnl else
+dnl   AC_MSG_RESULT([disabled])
+dnl fi
 
 dnl ---------------------------------------------------------------------------
 dnl NG Python bindings.
@@ -3960,6 +4025,7 @@ elif test "x$with_python" != "x" -a "$with_python" != "no" ; then
   fi
   AC_MSG_RESULT([enabled])
 else
+  PYTHON=""
   AC_MSG_RESULT([disabled])
 fi
 

@@ -160,6 +160,8 @@ class CPL_DLL OGROCIStatement {
     OGRFeatureDefn *GetResultDefn() { return poDefn; }
 
     char       **SimpleFetchRow();
+    
+    int          GetAffectedRows() const { return nAffectedRows; }
 
   private:    
     OGROCISession *poSession;
@@ -173,6 +175,7 @@ class CPL_DLL OGROCIStatement {
 
     int           nRawColumnCount;
     int           *panFieldMap;
+    int           nAffectedRows;
 };
 
 /************************************************************************/
@@ -193,7 +196,7 @@ public:
 
     void MakeRoomFor( int );
     void Append( const char * );
-    void Appendf( int nMax, const char *pszFormat, ... );
+    void Appendf( int nMax, const char *pszFormat, ... ) CPL_PRINT_FUNC_FORMAT (3, 4);
     char *StealString();
 
     char GetLast();
@@ -364,7 +367,7 @@ class OGROCILoaderLayer : public OGROCIWritableLayer
                         ~OGROCILoaderLayer();
 
     virtual void        ResetReading();
-    virtual int         GetFeatureCount( int );
+    virtual GIntBig     GetFeatureCount( int );
 
     virtual void        SetSpatialFilter( OGRGeometry * ) {}
 
@@ -431,7 +434,7 @@ class OGROCITableLayer : public OGROCIWritableLayer
     OCIInd            **papaeWriteFieldInd;
     int                *panWriteFIDs;
 
-    int                 AllocAndBindForWrite(int eType);
+    int                 AllocAndBindForWrite();
     OGRErr              FlushPendingFeatures();
 
     OGRErr              UnboundCreateFeature( OGRFeature *poFeature );
@@ -444,18 +447,18 @@ class OGROCITableLayer : public OGROCIWritableLayer
                         ~OGROCITableLayer();
 
     virtual void        ResetReading();
-    virtual int         GetFeatureCount( int );
+    virtual GIntBig     GetFeatureCount( int );
 
     virtual void        SetSpatialFilter( OGRGeometry * );
 
     virtual OGRErr      SetAttributeFilter( const char * );
 
     virtual OGRFeature *GetNextFeature();
-    virtual OGRFeature *GetFeature( long nFeatureId );
+    virtual OGRFeature *GetFeature( GIntBig nFeatureId );
 
     virtual OGRErr      ISetFeature( OGRFeature *poFeature );
     virtual OGRErr      ICreateFeature( OGRFeature *poFeature );
-    virtual OGRErr      DeleteFeature( long nFID );
+    virtual OGRErr      DeleteFeature( GIntBig nFID );
     
     virtual OGRErr      GetExtent(OGREnvelope *psExtent, int bForce = TRUE);
 
@@ -512,7 +515,8 @@ class OGROCIDataSource : public OGRDataSource
 
     OGROCISession      *GetSession() { return poSession; }
 
-    int                 Open( const char *, int bUpdate, int bTestOpen );
+    int                 Open( const char *, char** papszOpenOptions,
+                              int bUpdate, int bTestOpen );
     int                 OpenTable( const char *pszTableName, 
                                    int nSRID, int bUpdate, int bTestOpen );
 
@@ -541,24 +545,6 @@ class OGROCIDataSource : public OGRDataSource
 
     int                 FetchSRSId( OGRSpatialReference * poSRS );
     OGRSpatialReference *FetchSRS( int nSRID );
-};
-
-/************************************************************************/
-/*                             OGROCIDriver                             */
-/************************************************************************/
-
-class OGROCIDriver : public OGRSFDriver
-{
-  public:
-                ~OGROCIDriver();
-                
-    const char *GetName();
-    OGRDataSource *Open( const char *, int );
-
-    virtual OGRDataSource *CreateDataSource( const char *pszName,
-                                             char ** = NULL );
-    
-    int                 TestCapability( const char * );
 };
 
 /* -------------------------------------------------------------------- */

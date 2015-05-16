@@ -4665,12 +4665,10 @@ OGRGeometry *OGRGeometryFromEWKB( GByte *pabyWKB, int nLength, int* pnSRID,
 /*      understood by OGR, so if the SRID flag is set, we remove the    */
 /*      SRID (bytes at offset 5 to 8).                                  */
 /* -------------------------------------------------------------------- */
-    int bHasSRID = FALSE;
     if( nLength > 9 &&
         ((pabyWKB[0] == 0 /* big endian */ && (pabyWKB[1] & 0x20) )
         || (pabyWKB[0] != 0 /* little endian */ && (pabyWKB[4] & 0x20))) )
     {
-        bHasSRID = TRUE;
         if( pnSRID )
         {
             memcpy(pnSRID, pabyWKB+5, 4);
@@ -5166,11 +5164,11 @@ int OGR_GT_IsSubClassOf( OGRwkbGeometryType eType,
 /**
  * \brief Returns the collection type that can contain the passed geometry type
  *
- * Handled conversions are : wkbPoint -> wkbMultiPoint,
+ * Handled conversions are : wkbNone->wkbNone, wkbPoint -> wkbMultiPoint,
  * wkbLineString->wkbMultiLineString, wkbPolygon->wkbMultiPolygon,
  * wkbCircularString->wkbMultiCurve, wkbCompoundCurve->wkbMultiCurve,
  * wkbCurvePolygon->wkbMultiSurface.
- * In other cases, wkbUnknown is returned.
+ * In other cases, wkbUnknown is returned
  *
  * Passed Z flag is preserved.
  *
@@ -5183,6 +5181,8 @@ int OGR_GT_IsSubClassOf( OGRwkbGeometryType eType,
 
 OGRwkbGeometryType OGR_GT_GetCollection( OGRwkbGeometryType eType )
 {
+    if( eType == wkbNone )
+        return wkbNone;
     OGRwkbGeometryType eFGType = wkbFlatten(eType);
     if( eFGType == wkbPoint )
         eType = wkbMultiPoint;

@@ -30,7 +30,6 @@
 ###############################################################################
 
 import sys
-import os
 
 sys.path.append( '../pymod' )
 
@@ -84,7 +83,8 @@ def test_gdalsrsinfo_3():
 
     first_val =  'PROJCS["NAD27 / UTM zone 11N",GEOGCS["NAD27",DATUM["North_American_Datum_1927",SPHEROID["Clarke 1866",6378206.4,294.9786982139006,AUTHORITY["EPSG","7008"]],AUTHORITY["EPSG","6267"]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433],AUTHORITY["EPSG","4267"]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-117],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AUTHORITY["EPSG","26711"]]'
     second_val = 'PROJCS["NAD27 / UTM zone 11N",GEOGCS["NAD27",DATUM["North_American_Datum_1927",SPHEROID["Clarke 1866",6378206.4,294.9786982138982,AUTHORITY["EPSG","7008"]],AUTHORITY["EPSG","6267"]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433],AUTHORITY["EPSG","4267"]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-117],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AUTHORITY["EPSG","26711"]]'
-    if ret.strip() != first_val and ret.strip() != second_val:
+    third_val =  'PROJCS["NAD27 / UTM zone 11N",GEOGCS["NAD27",DATUM["North_American_Datum_1927",SPHEROID["Clarke 1866",6378206.4,294.9786982138982,AUTHORITY["EPSG","7008"]],AUTHORITY["EPSG","6267"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4267"]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-117],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","26711"]]'
+    if ret.strip() != first_val and ret.strip() != second_val and ret.strip() != third_val:
         print(ret.strip())
         return 'fail'
 
@@ -133,6 +133,7 @@ def test_gdalsrsinfo_6():
 
     ret = gdaltest.runexternal(test_cli_utilities.get_gdalsrsinfo_path() + \
                                    ' -o wkt_simple ../gcore/data/byte.tif')
+    ret = ret.replace('\r\n', '\n')
 
     first_val =  """PROJCS["NAD27 / UTM zone 11N",
     GEOGCS["NAD27",
@@ -193,6 +194,7 @@ def test_gdalsrsinfo_8():
 
     ret = gdaltest.runexternal(test_cli_utilities.get_gdalsrsinfo_path() + \
                                    ' -o wkt -p EPSG:4326')
+    ret = ret.replace('\r\n', '\n')
 
     if ret.strip() != """GEOGCS["WGS 84",
     DATUM["WGS_1984",
@@ -319,7 +321,7 @@ def test_gdalsrsinfo_14():
 ###############################################################################
 # Test .shp format
 
-def test_gdalsrsinfo_14():
+def test_gdalsrsinfo_14bis():
     if test_cli_utilities.get_gdalsrsinfo_path() is None:
         return 'skip'
 
@@ -386,6 +388,7 @@ gdaltest_list = [
     test_gdalsrsinfo_12,
     test_gdalsrsinfo_13,
     test_gdalsrsinfo_14,
+    test_gdalsrsinfo_14bis,
     test_gdalsrsinfo_15,
     test_gdalsrsinfo_16,
     None

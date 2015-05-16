@@ -32,9 +32,8 @@
 
 import os
 import sys
-import string
-import array
 from osgeo import gdal
+from osgeo import ogr
 
 sys.path.append( '../pymod' )
 
@@ -178,13 +177,90 @@ def http_4():
         if conn is None:
             print('cannot open URL')
             return 'skip'
+        try:
+            conn.read()
+        except:
+            print('cannot read')
+            return 'skip'
         conn.close()
+        gdaltest.post_reason('fail')
         return 'fail'
 
     filelist = ds.GetFileList()
     if '/vsicurl/ftp://ftp.remotesensing.org/gdal/data/gtiff/utm.tif' not in filelist:
         print(filelist)
+        gdaltest.post_reason('fail')
         return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test HTTP driver with non VSIL driver
+
+def http_5():
+
+    try:
+        drv = gdal.GetDriverByName( 'HTTP' )
+    except:
+        drv = None
+
+    if drv is None:
+        return 'skip'
+
+    ds = gdal.Open('http://svn.osgeo.org/gdal/trunk/autotest/gdrivers/data/s4103.blx')
+    if ds is None:
+        conn = gdaltest.gdalurlopen('http://svn.osgeo.org/gdal/trunk/autotest/gdrivers/data/s4103.blx')
+        if conn is None:
+            print('cannot open URL')
+            return 'skip'
+        try:
+            conn.read()
+        except:
+            print('cannot read')
+            return 'skip'
+        conn.close()
+        gdaltest.post_reason('fail')
+        return 'fail'
+    filename = ds.GetDescription()
+    ds = None
+    
+    try:
+        os.stat(filename)
+        gdaltest.post_reason('file %s should have been removed' % filename)
+        return 'fail'
+    except:
+        pass
+
+    return 'success'
+
+###############################################################################
+# Test HTTP driver with OGR driver
+
+def http_6():
+
+    try:
+        drv = gdal.GetDriverByName( 'HTTP' )
+    except:
+        drv = None
+
+    if drv is None:
+        return 'skip'
+
+    ds = ogr.Open('http://svn.osgeo.org/gdal/trunk/autotest/ogr/data/test.jml')
+    if ds is None:
+        conn = gdaltest.gdalurlopen('http://svn.osgeo.org/gdal/trunk/autotest/ogr/data/test.jml')
+        if conn is None:
+            print('cannot open URL')
+            return 'skip'
+        try:
+            conn.read()
+        except:
+            print('cannot read')
+            return 'skip'
+        conn.close()
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
 
     return 'success'
 
@@ -203,6 +279,8 @@ gdaltest_list = [ http_1,
                   http_3,
                   #http_4_old,
                   http_4,
+                  http_5,
+                  http_6,
                   http_cleanup ]
 
 if __name__ == '__main__':

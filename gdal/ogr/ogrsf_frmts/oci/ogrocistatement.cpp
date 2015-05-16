@@ -51,6 +51,7 @@ OGROCIStatement::OGROCIStatement( OGROCISession *poSessionIn )
     panFieldMap = NULL;
 
     pszCommandText = NULL;
+    nAffectedRows = 0;
 }
 
 /************************************************************************/
@@ -261,7 +262,17 @@ CPLErr OGROCIStatement::Execute( const char *pszSQLStatement,
         return CE_Failure;
 
     if( !bSelect )
+    {
+        ub4 row_count;
+        if( poSession->Failed( 
+            OCIAttrGet( hStatement, OCI_HTYPE_STMT,
+                        &row_count, 0, OCI_ATTR_ROW_COUNT, poSession->hError ),
+                        "OCIAttrGet(OCI_ATTR_ROW_COUNT)") )
+            return CE_Failure;
+        nAffectedRows = row_count;
+
         return CE_None;
+    }
 
 /* -------------------------------------------------------------------- */
 /*      Count the columns.                                              */
@@ -286,6 +297,7 @@ CPLErr OGROCIStatement::Execute( const char *pszSQLStatement,
 /*      defines.                                                        */
 /* ==================================================================== */
     poDefn = new OGRFeatureDefn( pszCommandText );
+    poDefn->SetGeomType(wkbNone);
     poDefn->Reference();
 
     for( int iParm = 0; iParm < nRawColumnCount; iParm++ )
@@ -310,8 +322,17 @@ CPLErr OGROCIStatement::Execute( const char *pszSQLStatement,
 
         if( oField.GetType() == OFTBinary )
         {
-            panFieldMap[iParm] = -1;
-            continue;                   
+            /* We could probably generalize that, but at least it works in that */
+            /* use case */
+            if( EQUAL(oField.GetNameRef(), "DATA_DEFAULT") && nOCIType == SQLT_LNG )
+            {
+                oField.SetType(OFTString);
+            }
+            else
+            {
+                panFieldMap[iParm] = -1;
+                continue;
+            }
         }
 
         poDefn->AddFieldDefn( &oField );

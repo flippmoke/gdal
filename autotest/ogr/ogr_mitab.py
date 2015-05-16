@@ -30,7 +30,6 @@
 import os
 import random
 import sys
-import string
 import shutil
 import time
 
@@ -164,7 +163,7 @@ def ogr_mitab_4():
         return 'skip'
 
     sql_lyr = gdaltest.mapinfo_ds.ExecuteSQL( \
-        'select * from tpoly where prfedea = "35043413"' )
+        "select * from tpoly where prfedea = '35043413'" )
 
     tr = ogrtest.check_features_against_list( sql_lyr, 'prfedea', [ '35043413' ] )
     if tr:
@@ -524,6 +523,26 @@ def ogr_mitab_15():
     if feat is None:
         return 'fail'
     ds = None
+
+    # Test opening .mif without .mid even if there are declared attributes
+    ds = ogr.GetDriverByName('MapInfo File').CreateDataSource('/vsimem/nomid.mif')
+    lyr = ds.CreateLayer('empty')
+    lyr.CreateField(ogr.FieldDefn('ID', ogr.OFTInteger))
+    f = ogr.Feature(lyr.GetLayerDefn())
+    f.SetField(0, 1)
+    f.SetGeometryDirectly(ogr.CreateGeometryFromWkt('POINT(1 2)'))
+    lyr.CreateFeature(f)
+    ds = None
+
+    gdal.Unlink('/vsimem/nomid.mid')
+    ds = ogr.Open('/vsimem/nomid.mif')
+    lyr = ds.GetLayer(0)
+    f = lyr.GetNextFeature()
+    if f.IsFieldSet(0) or f.GetGeometryRef() is None:
+        gdaltest.post_reason('failure')
+        f.DumpReadable()
+        return 'fail'
+    gdal.Unlink('/vsimem/nomid.mif')
 
     return 'success'
 
@@ -1023,7 +1042,6 @@ def ogr_mitab_25():
                 gdaltest.post_reason('fail')
                 return 'fail'
                 
-        import test_cli_utilities
         if test_cli_utilities.get_test_ogrsf_path() is not None:
             ret = gdaltest.runexternal(test_cli_utilities.get_test_ogrsf_path() + ' -ro -fsf ' + filename)
             if ret.find('INFO') == -1 or ret.find('ERROR') != -1:
@@ -1073,11 +1091,8 @@ def ogr_mitab_26():
 
             if j == 1:
                 # Expected failure : already deleted feature
-                gdal.ErrorReset()
-                gdal.PushErrorHandler('CPLQuietErrorHandler')
                 ret = lyr.DeleteFeature(int(nb_features/2))
-                gdal.PopErrorHandler()
-                if ret == 0 or gdal.GetLastErrorMsg() == '':
+                if ret != ogr.OGRERR_NON_EXISTING_FEATURE:
                     print(j)
                     print(nb_features)
                     gdaltest.post_reason('fail')
@@ -1091,10 +1106,8 @@ def ogr_mitab_26():
                     return 'fail'
 
                 # Expected failure : illegal feature id
-                gdal.PushErrorHandler('CPLQuietErrorHandler')
                 ret = lyr.DeleteFeature(nb_features+1)
-                gdal.PopErrorHandler()
-                if ret == 0 or gdal.GetLastErrorMsg() == '':
+                if ret != ogr.OGRERR_NON_EXISTING_FEATURE:
                     print(j)
                     print(nb_features)
                     gdaltest.post_reason('fail')
@@ -1392,7 +1405,6 @@ def ogr_mitab_29():
     ds = ogr.Open('tmp/compr_symb_deleted_records.tab', update = 1)
     lyr = ds.GetLayer(0)
     # Re-add the 98x98 interior points
-    i = 0
     N2 = 98
     N = N2 * N2
     permutation = generate_permutation(N)
@@ -2012,6 +2024,59 @@ def ogr_mitab_36():
     return 'success'
 
 ###############################################################################
+# Simple testing of Seamless tables
+
+def ogr_mitab_37():
+
+    ds = ogr.Open('data/seamless.tab')
+    lyr = ds.GetLayer(0)
+    if lyr.GetFeatureCount() != 4:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetFID() != 4294967297 or f.id != '1':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetFID() != 4294967298 or f.id != '2':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetFID() != 8589934593 or f.id != '3':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetNextFeature()
+    if f.GetFID() != 8589934594 or f.id != '4':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetFeature(4294967297)
+    if f.GetFID() != 4294967297 or f.id != '1':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetFeature(8589934594)
+    if f.GetFID() != 8589934594 or f.id != '4':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetFeature(8589934594+1)
+    if f is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    f = lyr.GetFeature(4294967297*2+1)
+    if f is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
 #
 
 def ogr_mitab_cleanup():
@@ -2062,6 +2127,7 @@ gdaltest_list = [
     ogr_mitab_34,
     ogr_mitab_35,
     ogr_mitab_36,
+    ogr_mitab_37,
     ogr_mitab_cleanup
     ]
 

@@ -262,11 +262,11 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
         poRet = new swq_expr_node(0);
         poRet->field_type = node->field_type;
 
-        if( sub_node_values[0]->field_type == SWQ_INTEGER )
-            sub_node_values[0]->float_value = sub_node_values[0]->int_value;
+        if( SWQ_IS_INTEGER(sub_node_values[0]->field_type) )
+            sub_node_values[0]->float_value = (double) sub_node_values[0]->int_value;
         if( node->nSubExprCount > 1 &&
-            sub_node_values[1]->field_type == SWQ_INTEGER )
-            sub_node_values[1]->float_value = sub_node_values[1]->int_value;
+            SWQ_IS_INTEGER(sub_node_values[1]->field_type) )
+            sub_node_values[1]->float_value = (double)sub_node_values[1]->int_value;
 
         if( node->nOperation != SWQ_ISNULL )
         {
@@ -285,7 +285,7 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
                         poRet->is_null = 1;
                         return poRet;
                     }
-                    else if( poRet->field_type == SWQ_INTEGER ||
+                    else if( SWQ_IS_INTEGER(poRet->field_type) ||
                              node->nOperation == SWQ_MODULUS )
                     {
                         poRet->field_type = SWQ_INTEGER;
@@ -381,12 +381,12 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
             
           case SWQ_MODULUS:
           {
-            int nRight = (int) sub_node_values[1]->float_value;
+            GIntBig nRight = (GIntBig) sub_node_values[1]->float_value;
             poRet->field_type = SWQ_INTEGER;
             if (nRight == 0)
                 poRet->int_value = INT_MAX;
             else
-                poRet->int_value = ((int) sub_node_values[0]->float_value)
+                poRet->int_value = ((GIntBig) sub_node_values[0]->float_value)
                     % nRight;
             break;
           }
@@ -401,7 +401,7 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
 /* -------------------------------------------------------------------- */
 /*      integer/boolean operations.                                     */
 /* -------------------------------------------------------------------- */
-    else if( sub_node_values[0]->field_type == SWQ_INTEGER
+    else if( SWQ_IS_INTEGER(sub_node_values[0]->field_type)
         || sub_node_values[0]->field_type == SWQ_BOOLEAN )
     {
         poRet = new swq_expr_node(0);
@@ -418,7 +418,7 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
                         poRet->int_value = FALSE;
                         return poRet;
                     }
-                    else if( poRet->field_type == SWQ_INTEGER )
+                    else if( SWQ_IS_INTEGER(poRet->field_type) )
                     {
                         poRet->int_value = 0;
                         poRet->is_null = 1;
@@ -572,10 +572,45 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
         switch( (swq_op) node->nOperation )
         {
           case SWQ_EQ:
-            poRet->int_value = 
-                strcasecmp(sub_node_values[0]->string_value,
-                           sub_node_values[1]->string_value) == 0;
+          {
+            /* When comparing timestamps, the +00 at the end might be discarded */
+            /* if the other member has no explicit timezone */
+            if( (sub_node_values[0]->field_type == SWQ_TIMESTAMP ||
+                 sub_node_values[0]->field_type == SWQ_STRING) &&
+                (sub_node_values[1]->field_type == SWQ_TIMESTAMP ||
+                 sub_node_values[1]->field_type == SWQ_STRING) &&
+                strlen(sub_node_values[0]->string_value) > 3 &&
+                strlen(sub_node_values[1]->string_value) > 3 &&
+                (strcmp(sub_node_values[0]->string_value + strlen(sub_node_values[0]->string_value)-3, "+00") == 0 &&
+                 sub_node_values[1]->string_value[strlen(sub_node_values[1]->string_value)-3] == ':') )
+            {
+                poRet->int_value = 
+                    EQUALN(sub_node_values[0]->string_value,
+                           sub_node_values[1]->string_value,
+                           strlen(sub_node_values[1]->string_value));
+            }
+            else if( (sub_node_values[0]->field_type == SWQ_TIMESTAMP ||
+                      sub_node_values[0]->field_type == SWQ_STRING) &&
+                     (sub_node_values[1]->field_type == SWQ_TIMESTAMP ||
+                      sub_node_values[1]->field_type == SWQ_STRING) &&
+                     strlen(sub_node_values[0]->string_value) > 3 &&
+                     strlen(sub_node_values[1]->string_value) > 3 &&
+                     (sub_node_values[0]->string_value[strlen(sub_node_values[0]->string_value)-3] == ':')  &&
+                      strcmp(sub_node_values[1]->string_value + strlen(sub_node_values[1]->string_value)-3, "+00") == 0)
+            {
+                poRet->int_value = 
+                    EQUALN(sub_node_values[0]->string_value,
+                           sub_node_values[1]->string_value,
+                           strlen(sub_node_values[0]->string_value));
+            }
+            else
+            {
+                poRet->int_value = 
+                    strcasecmp(sub_node_values[0]->string_value,
+                            sub_node_values[1]->string_value) == 0;
+            }
             break;
+          }
 
           case SWQ_NE:
             poRet->int_value = 
@@ -665,8 +700,8 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
               int nOffset, nSize;
               const char *pszSrcStr = sub_node_values[0]->string_value;
 
-              if( sub_node_values[1]->field_type == SWQ_INTEGER )
-                  nOffset = sub_node_values[1]->int_value;
+              if( SWQ_IS_INTEGER(sub_node_values[1]->field_type) )
+                  nOffset = (int)sub_node_values[1]->int_value;
               else if( sub_node_values[1]->field_type == SWQ_FLOAT )
                   nOffset = (int) sub_node_values[1]->float_value; 
               else
@@ -674,8 +709,8 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
 
               if( node->nSubExprCount < 3 )
                   nSize = 100000;
-              else if( sub_node_values[2]->field_type == SWQ_INTEGER )
-                  nSize = sub_node_values[2]->int_value;
+              else if( SWQ_IS_INTEGER(sub_node_values[2]->field_type) )
+                  nSize = (int)sub_node_values[2]->int_value;
               else if( sub_node_values[2]->field_type == SWQ_FLOAT )
                   nSize = (int) sub_node_values[2]->float_value; 
               else
@@ -737,10 +772,10 @@ swq_expr_node *SWQGeneralEvaluator( swq_expr_node *node,
 }
 
 /************************************************************************/
-/*                    SWQAutoPromoteIntegerToFloat()                    */
+/*                SWQAutoPromoteIntegerToInteger64OrFloat()             */
 /************************************************************************/
 
-static void SWQAutoPromoteIntegerToFloat( swq_expr_node *poNode )
+static void SWQAutoPromoteIntegerToInteger64OrFloat( swq_expr_node *poNode )
 
 {
     if( poNode->nSubExprCount < 2 )
@@ -749,14 +784,18 @@ static void SWQAutoPromoteIntegerToFloat( swq_expr_node *poNode )
     swq_field_type eArgType = poNode->papoSubExpr[0]->field_type;
     int i;
 
-    // We allow mixes of integer and float, and string and dates.
-    // When encountered, we promote integers to floats, and strings to
-    // dates.  We do that now.
+    // We allow mixes of integer, integer64 and float, and string and dates.
+    // When encountered, we promote integers/integer64 to floats, 
+    // integer to integer64 and strings to dates.  We do that now.
     for( i = 1; i < poNode->nSubExprCount; i++ )
     {
-        if( eArgType == SWQ_INTEGER
-            && poNode->papoSubExpr[i]->field_type == SWQ_FLOAT )
+        swq_expr_node *poSubNode = poNode->papoSubExpr[i];
+        if( SWQ_IS_INTEGER(eArgType)
+            && poSubNode->field_type == SWQ_FLOAT )
             eArgType = SWQ_FLOAT;
+        else if( eArgType == SWQ_INTEGER
+                 && poSubNode->field_type == SWQ_INTEGER64 )
+            eArgType = SWQ_INTEGER64;
     }
     
     for( i = 0; i < poNode->nSubExprCount; i++ )
@@ -764,12 +803,19 @@ static void SWQAutoPromoteIntegerToFloat( swq_expr_node *poNode )
         swq_expr_node *poSubNode = poNode->papoSubExpr[i];
 
         if( eArgType == SWQ_FLOAT
-            && poSubNode->field_type == SWQ_INTEGER )
+            && SWQ_IS_INTEGER(poSubNode->field_type) )
         {
             if( poSubNode->eNodeType == SNT_CONSTANT )
             {
-                poSubNode->float_value = poSubNode->int_value;
+                poSubNode->float_value = (double) poSubNode->int_value;
                 poSubNode->field_type = SWQ_FLOAT;
+            }
+        }
+        else if( eArgType == SWQ_INTEGER64 && poSubNode->field_type == SWQ_INTEGER )
+        {
+            if( poSubNode->eNodeType == SNT_CONSTANT )
+            {
+                poSubNode->field_type = SWQ_INTEGER64;
             }
         }
     }
@@ -841,9 +887,9 @@ static void SWQAutoConvertStringToNumeric( swq_expr_node *poNode )
 
         /* identify the mixture of the argument type */
         if( (eArgType == SWQ_STRING
-            && (poSubNode->field_type == SWQ_INTEGER
+            && (SWQ_IS_INTEGER(poSubNode->field_type)
                || poSubNode->field_type == SWQ_FLOAT)) ||
-            (eArgType == SWQ_INTEGER
+            (SWQ_IS_INTEGER(eArgType)
             && poSubNode->field_type == SWQ_STRING) )
         {
             eArgType = SWQ_FLOAT;
@@ -872,7 +918,7 @@ static void SWQAutoConvertStringToNumeric( swq_expr_node *poNode )
                 }
 
                 /* we should also fill the integer value in this case */
-                poSubNode->int_value = (int)poSubNode->float_value;
+                poSubNode->int_value = (GIntBig)poSubNode->float_value;
                 poSubNode->field_type = SWQ_FLOAT;
             }
         }
@@ -905,7 +951,8 @@ static int SWQCheckSubExprAreNotGeometries( swq_expr_node *poNode )
 /*      circumstances.                                                  */
 /************************************************************************/
 
-swq_field_type SWQGeneralChecker( swq_expr_node *poNode )
+swq_field_type SWQGeneralChecker( swq_expr_node *poNode,
+                                  int bAllowMismatchTypeOnFieldComparison  )
 
 {									
     swq_field_type eRetType = SWQ_ERROR;
@@ -934,7 +981,7 @@ swq_field_type SWQGeneralChecker( swq_expr_node *poNode )
             return SWQ_ERROR;
         eRetType = SWQ_BOOLEAN;
         SWQAutoConvertStringToNumeric( poNode );
-        SWQAutoPromoteIntegerToFloat( poNode );
+        SWQAutoPromoteIntegerToInteger64OrFloat( poNode );
         SWQAutoPromoteStringToDateTime( poNode );
         eArgType = poNode->papoSubExpr[0]->field_type;
         break;
@@ -960,11 +1007,13 @@ swq_field_type SWQGeneralChecker( swq_expr_node *poNode )
       case SWQ_ADD:
         if( !SWQCheckSubExprAreNotGeometries(poNode) )
             return SWQ_ERROR;
-        SWQAutoPromoteIntegerToFloat( poNode );
+        SWQAutoPromoteIntegerToInteger64OrFloat( poNode );
         if( poNode->papoSubExpr[0]->field_type == SWQ_STRING )
             eRetType = eArgType = SWQ_STRING;
         else if( poNode->papoSubExpr[0]->field_type == SWQ_FLOAT )
             eRetType = eArgType = SWQ_FLOAT;
+        else if( poNode->papoSubExpr[0]->field_type == SWQ_INTEGER64 )
+            eRetType = eArgType = SWQ_INTEGER64;
         else
             eRetType = eArgType = SWQ_INTEGER;
         break;
@@ -974,9 +1023,11 @@ swq_field_type SWQGeneralChecker( swq_expr_node *poNode )
       case SWQ_DIVIDE:
         if( !SWQCheckSubExprAreNotGeometries(poNode) )
             return SWQ_ERROR;
-        SWQAutoPromoteIntegerToFloat( poNode );
+        SWQAutoPromoteIntegerToInteger64OrFloat( poNode );
         if( poNode->papoSubExpr[0]->field_type == SWQ_FLOAT )
             eRetType = eArgType = SWQ_FLOAT;
+        else if( poNode->papoSubExpr[0]->field_type == SWQ_INTEGER64 )
+            eRetType = eArgType = SWQ_INTEGER64;
         else
             eRetType = eArgType = SWQ_INTEGER;
         break;
@@ -1048,17 +1099,48 @@ swq_field_type SWQGeneralChecker( swq_expr_node *poNode )
     {
         int i;
 
-        if( eArgType == SWQ_INTEGER || eArgType == SWQ_BOOLEAN )
+        if( SWQ_IS_INTEGER(eArgType) || eArgType == SWQ_BOOLEAN )
             eArgType = SWQ_FLOAT;
 
         for( i = 0; i < poNode->nSubExprCount; i++ )
         {
             swq_field_type eThisArgType = poNode->papoSubExpr[i]->field_type;
-            if( eThisArgType == SWQ_INTEGER ||  eThisArgType == SWQ_BOOLEAN )
+            if( SWQ_IS_INTEGER(eThisArgType) ||  eThisArgType == SWQ_BOOLEAN )
                 eThisArgType = SWQ_FLOAT;
 
             if( eArgType != eThisArgType )
             {
+                // Conveniency for join. We allow comparing numeric columns
+                // and string columns, by casting string columns to numeric
+                if( bAllowMismatchTypeOnFieldComparison &&
+                    poNode->nSubExprCount == 2 &&
+                    poNode->nOperation == SWQ_EQ &&
+                    poNode->papoSubExpr[0]->eNodeType == SNT_COLUMN &&
+                    poNode->papoSubExpr[i]->eNodeType == SNT_COLUMN &&
+                    eArgType == SWQ_FLOAT && eThisArgType == SWQ_STRING )
+                {
+                    swq_expr_node* poNewNode = new swq_expr_node(SWQ_CAST);
+                    poNewNode->PushSubExpression(poNode->papoSubExpr[i]);
+                    poNewNode->PushSubExpression(new swq_expr_node("FLOAT"));
+                    SWQCastChecker(poNewNode, FALSE);
+                    poNode->papoSubExpr[i] = poNewNode;
+                    break;
+                }
+                if( bAllowMismatchTypeOnFieldComparison &&
+                    poNode->nSubExprCount == 2 &&
+                    poNode->nOperation == SWQ_EQ &&
+                    poNode->papoSubExpr[0]->eNodeType == SNT_COLUMN &&
+                    poNode->papoSubExpr[i]->eNodeType == SNT_COLUMN &&
+                    eThisArgType == SWQ_FLOAT && eArgType == SWQ_STRING )
+                {
+                    swq_expr_node* poNewNode = new swq_expr_node(SWQ_CAST);
+                    poNewNode->PushSubExpression(poNode->papoSubExpr[0]);
+                    poNewNode->PushSubExpression(new swq_expr_node("FLOAT"));
+                    SWQCastChecker(poNewNode, FALSE);
+                    poNode->papoSubExpr[0] = poNewNode;
+                    break;
+                }
+
                 const swq_operation *poOp = 
                     swq_op_registrar::GetOperator((swq_op)poNode->nOperation);
                 
@@ -1115,12 +1197,41 @@ swq_expr_node *SWQCastEvaluator( swq_expr_node *node,
                     poRetNode->int_value = poSrcNode->int_value;
                     break;
 
+                case SWQ_INTEGER64:
+                    // TODO: warn in case of overflow ?
+                    poRetNode->int_value = (int) poSrcNode->int_value;
+                    break;
+
                 case SWQ_FLOAT:
                     poRetNode->int_value = (int) poSrcNode->float_value;
                     break;
 
                 default:
                     poRetNode->int_value = atoi(poSrcNode->string_value);
+                    break;
+            }
+        }
+        break;
+        
+        case SWQ_INTEGER64:
+        {
+            poRetNode = new swq_expr_node( 0 );
+            poRetNode->is_null = poSrcNode->is_null;
+
+            switch( poSrcNode->field_type )
+            {
+                case SWQ_INTEGER:
+                case SWQ_INTEGER64:
+                case SWQ_BOOLEAN:
+                    poRetNode->int_value = poSrcNode->int_value;
+                    break;
+
+                case SWQ_FLOAT:
+                    poRetNode->int_value = (GIntBig) poSrcNode->float_value;
+                    break;
+
+                default:
+                    poRetNode->int_value = CPLAtoGIntBig(poSrcNode->string_value);
                     break;
             }
         }
@@ -1134,8 +1245,9 @@ swq_expr_node *SWQCastEvaluator( swq_expr_node *node,
             switch( poSrcNode->field_type )
             {
                 case SWQ_INTEGER:
+                case SWQ_INTEGER64:
                 case SWQ_BOOLEAN:
-                    poRetNode->float_value = poSrcNode->int_value;
+                    poRetNode->float_value = (double) poSrcNode->int_value;
                     break;
 
                 case SWQ_FLOAT:
@@ -1190,7 +1302,8 @@ swq_expr_node *SWQCastEvaluator( swq_expr_node *node,
             {
                 case SWQ_INTEGER:
                 case SWQ_BOOLEAN:
-                    osRet.Printf( "%d", poSrcNode->int_value );
+                case SWQ_INTEGER64:
+                    osRet.Printf( CPL_FRMT_GIB, poSrcNode->int_value );
                     break;
 
                 case SWQ_FLOAT:
@@ -1220,7 +1333,7 @@ swq_expr_node *SWQCastEvaluator( swq_expr_node *node,
             {
                 int nWidth;
 
-                nWidth = sub_node_values[2]->int_value;
+                nWidth = (int) sub_node_values[2]->int_value;
                 if( nWidth > 0 && (int) strlen(osRet) > nWidth )
                     osRet.resize(nWidth);
             }
@@ -1237,7 +1350,8 @@ swq_expr_node *SWQCastEvaluator( swq_expr_node *node,
 /*                           SWQCastChecker()                           */
 /************************************************************************/
 
-swq_field_type SWQCastChecker( swq_expr_node *poNode )
+swq_field_type SWQCastChecker( swq_expr_node *poNode,
+                               CPL_UNUSED int bAllowMismatchTypeOnFieldComparison )
 
 {									
     swq_field_type eType = SWQ_ERROR;
@@ -1257,6 +1371,8 @@ swq_field_type SWQCastChecker( swq_expr_node *poNode )
         eType = SWQ_STRING;
     else if( EQUAL(pszTypeName,"integer") )
         eType = SWQ_INTEGER;
+    else if( EQUAL(pszTypeName,"bigint") )
+        eType = SWQ_INTEGER64;
     else if( EQUAL(pszTypeName,"smallint") )
         eType = SWQ_INTEGER;
     else if( EQUAL(pszTypeName,"float") )

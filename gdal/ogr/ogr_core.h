@@ -293,6 +293,7 @@ typedef int OGRErr;
 #define OGRERR_FAILURE             6
 #define OGRERR_UNSUPPORTED_SRS     7
 #define OGRERR_INVALID_HANDLE      8
+#define OGRERR_NON_EXISTING_FEATURE 9   /* added in GDAL 2.0 */
 
 typedef int     OGRBoolean;
 
@@ -432,10 +433,71 @@ typedef enum
 #  define DB2_V72_UNFIX_BYTE_ORDER(x) (x)
 #endif
 
+/** Alter field name.
+ * Used by OGR_L_AlterFieldDefn().
+ */
 #define ALTER_NAME_FLAG            0x1
+
+/** Alter field type.
+ * Used by OGR_L_AlterFieldDefn().
+ */
 #define ALTER_TYPE_FLAG            0x2
+
+/** Alter field width and precision.
+ * Used by OGR_L_AlterFieldDefn().
+ */
 #define ALTER_WIDTH_PRECISION_FLAG 0x4
-#define ALTER_ALL_FLAG             (ALTER_NAME_FLAG | ALTER_TYPE_FLAG | ALTER_WIDTH_PRECISION_FLAG)
+
+/** Alter field NOT NULL constraint.
+ * Used by OGR_L_AlterFieldDefn().
+ * @since GDAL 2.0
+ */
+#define ALTER_NULLABLE_FLAG        0x8
+
+/** Alter field DEFAULT value.
+ * Used by OGR_L_AlterFieldDefn().
+ * @since GDAL 2.0
+ */
+#define ALTER_DEFAULT_FLAG         0x10
+
+/** Alter all parameters of field definition.
+ * Used by OGR_L_AlterFieldDefn().
+ */
+#define ALTER_ALL_FLAG             (ALTER_NAME_FLAG | ALTER_TYPE_FLAG | ALTER_WIDTH_PRECISION_FLAG | ALTER_NULLABLE_FLAG | ALTER_DEFAULT_FLAG)
+
+
+/** Validate that fields respect not-null constraints.
+ * Used by OGR_F_Validate().
+ * @since GDAL 2.0
+ */
+#define OGR_F_VAL_NULL           0x00000001
+
+/** Validate that geometries respect geometry column type.
+ * Used by OGR_F_Validate().
+ * @since GDAL 2.0
+ */
+#define OGR_F_VAL_GEOM_TYPE      0x00000002
+
+/** Validate that (string) fields respect field width.
+ * Used by OGR_F_Validate().
+ * @since GDAL 2.0
+ */
+#define OGR_F_VAL_WIDTH          0x00000004
+
+/** Allow fields that are null when there's an associated default value.
+ * This can be used for drivers where the low-level layers will automatically set the
+ * field value to the associated default value.
+ * This flag only makes sense if OGR_F_VAL_NULL is set too.
+ * Used by OGR_F_Validate().
+ * @since GDAL 2.0
+ */
+#define OGR_F_VAL_ALLOW_NULL_WHEN_DEFAULT       0x00000008
+
+/** Enable all validation tests.
+ * Used by OGR_F_Validate().
+ * @since GDAL 2.0
+ */
+#define OGR_F_VAL_ALL            0xFFFFFFFF
 
 /************************************************************************/
 /*                  ogr_feature.h related definitions.                  */
@@ -461,7 +523,9 @@ typedef enum
   /** Date */                                   OFTDate = 9,
   /** Time */                                   OFTTime = 10,
   /** Date and Time */                          OFTDateTime = 11,
-                                                OFTMaxType = 11
+  /** Single 64bit integer */                   OFTInteger64 = 12,
+  /** List of 64bit integers */                 OFTInteger64List = 13,
+                                                OFTMaxType = 13
 } OGRFieldType;
 
 /**
@@ -509,6 +573,7 @@ typedef enum
 
 typedef union {
     int         Integer;
+    GIntBig     Integer64;
     double      Real;
     char       *String;
     
@@ -517,6 +582,11 @@ typedef union {
         int     *paList;
     } IntegerList;
     
+    struct {
+        int     nCount;
+        GIntBig *paList;
+    } Integer64List;
+
     struct {
         int     nCount;
         double  *paList;
@@ -543,11 +613,14 @@ typedef union {
         GByte   Day;
         GByte   Hour;
         GByte   Minute;
-        GByte   Second;
         GByte   TZFlag; /* 0=unknown, 1=localtime(ambiguous), 
                            100=GMT, 104=GMT+1, 80=GMT-5, etc */
+        GByte   Reserved; /* must be set to 0 */
+        float   Second; /* with millisecond accuracy. at the end of the structure, so as to keep it 12 bytes on 32 bit */
     } Date;
 } OGRField;
+
+#define OGR_GET_MS(floatingpoint_sec)   (int)(((floatingpoint_sec) - (int)(floatingpoint_sec)) * 1000 + 0.5)
 
 int CPL_DLL OGRParseDate( const char *pszInput, OGRField *psOutput, 
                           int nOptions );
@@ -577,10 +650,20 @@ int CPL_DLL OGRParseDate( const char *pszInput, OGRField *psOutput,
 #define ODsCDeleteLayer        "DeleteLayer"
 #define ODsCCreateGeomFieldAfterCreateLayer   "CreateGeomFieldAfterCreateLayer"
 #define ODsCCurveGeometries    "CurveGeometries"
+#define ODsCTransactions       "Transactions"
+#define ODsCEmulatedTransactions "EmulatedTransactions"
 
 #define ODrCCreateDataSource   "CreateDataSource"
 #define ODrCDeleteDataSource   "DeleteDataSource"
 
+/* -------------------------------------------------------------------- */
+/*      Layer metadata items.                                           */
+/* -------------------------------------------------------------------- */
+/** Capability set to YES as metadata on a layer that has features with
+  * 64 bit identifiers.
+  @since GDAL 2.0
+  */
+#define OLMD_FID64             "OLMD_FID64"
 
 /************************************************************************/
 /*                  ogr_featurestyle.h related definitions.             */
