@@ -1801,6 +1801,8 @@ CPLErr GDALDataset::RasterIO( GDALRWFlag eRWFlag,
     }
 
 
+    int bCallLeaveReadWrite = EnterReadWrite(eRWFlag);
+
 /* -------------------------------------------------------------------- */
 /*      We are being forced to use cached IO instead of a driver        */
 /*      specific implementation.                                        */
@@ -1827,6 +1829,8 @@ CPLErr GDALDataset::RasterIO( GDALRWFlag eRWFlag,
                        nPixelSpace, nLineSpace, nBandSpace,
                        psExtraArg );
     }
+
+    if( bCallLeaveReadWrite ) LeaveReadWrite();
 
 /* -------------------------------------------------------------------- */
 /*      Cleanup                                                         */
@@ -2554,7 +2558,9 @@ GDALDatasetH CPL_STDCALL GDALOpenEx( const char* pszFilename,
             oOpenInfo.papszOpenOptions = papszTmpOpenOptions;
         }
 
-        if( poDriver->pfnIdentify && poDriver->pfnIdentify(&oOpenInfo) > 0 )
+        int bIdentifyRes =
+            ( poDriver->pfnIdentify && poDriver->pfnIdentify(&oOpenInfo) > 0 );
+        if( bIdentifyRes )
         {
             GDALValidateOpenOptions( poDriver, oOpenInfo.papszOpenOptions );
         }
@@ -2562,6 +2568,10 @@ GDALDatasetH CPL_STDCALL GDALOpenEx( const char* pszFilename,
         if ( poDriver->pfnOpen != NULL )
         {
             poDS = poDriver->pfnOpen( &oOpenInfo );
+            // If we couldn't determine for sure with Identify() (it returned -1)
+            // but that Open() managed to open the file, post validate options.
+            if( poDS != NULL && poDriver->pfnIdentify && !bIdentifyRes )
+                GDALValidateOpenOptions( poDriver, oOpenInfo.papszOpenOptions );
         }
         else if( poDriver->pfnOpenWithDriverArg != NULL )
         {
@@ -5724,4 +5734,27 @@ OGRErr GDALDatasetRollbackTransaction(GDALDatasetH hDS)
 #endif
 
     return ((GDALDataset*) hDS)->RollbackTransaction();
+}
+
+/************************************************************************/
+/*                          EnterReadWrite()                            */
+/************************************************************************/
+
+int GDALDataset::EnterReadWrite(GDALRWFlag eRWFlag)
+{
+    if( eAccess == GA_Update && (eRWFlag == GF_Write || m_hMutex != NULL) )
+    {
+        CPLCreateOrAcquireMutex(&m_hMutex, 1000.0);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/************************************************************************/
+/*                         LeaveReadWrite()                             */
+/************************************************************************/
+
+void GDALDataset::LeaveReadWrite()
+{
+    CPLReleaseMutex(m_hMutex);
 }

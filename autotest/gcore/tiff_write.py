@@ -2515,6 +2515,28 @@ def tiff_write_70():
         return 'fail'
     ds = None
 
+    ds = gdal.Open('tmp/tiff_write_70.tif', gdal.GA_Update)
+    if ds.GetRasterBand(1).DeleteNoDataValue() != 0:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if ds.GetRasterBand(1).GetNoDataValue() is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
+    try:
+        os.stat('tmp/tiff_write_70.tif.aux.xml')
+        gdaltest.post_reason('fail')
+        return 'fail'
+    except:
+        pass
+
+    ds = gdal.Open('tmp/tiff_write_70.tif')
+    if ds.GetRasterBand(1).GetNoDataValue() is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    ds = None
+
     gdaltest.tiff_drv.Delete( 'tmp/tiff_write_70.tif' )
     gdaltest.tiff_drv.Delete( 'tmp/tiff_write_70_ref.tif' )
 
@@ -5839,6 +5861,86 @@ def tiff_write_135():
     return 'success'
 
 ###############################################################################
+# Test writing a single-strip mono-bit dataset
+
+def tiff_write_136():
+
+    src_ds = gdaltest.tiff_drv.Create('/vsimem/tiff_write_136_src.tif', 8, 2001)
+    src_ds.GetRasterBand(1).Fill(1)
+    expected_cs = src_ds.GetRasterBand(1).Checksum()
+    ds = gdaltest.tiff_drv.CreateCopy('/vsimem/tiff_write_136.tif', src_ds, options = ['NBITS=1', 'COMPRESS=DEFLATE', 'BLOCKYSIZE=2001'])
+    src_ds = None
+    ds = None
+    ds = gdal.Open('/vsimem/tiff_write_136.tif')
+    cs = ds.GetRasterBand(1).Checksum()
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        print(expected_cs)
+        return 'fail'
+
+    gdal.Unlink('/vsimem/tiff_write_136_src.tif')
+    gdal.Unlink('/vsimem/tiff_write_136.tif')
+
+    return 'success'
+
+###############################################################################
+# Test multi-threaded writing
+
+def tiff_write_137():
+    
+    src_ds = gdaltest.tiff_drv.Create('/vsimem/tiff_write_137_src.tif', 4000, 4000)
+    src_ds.GetRasterBand(1).Fill(1)
+    expected_cs = src_ds.GetRasterBand(1).Checksum()
+    
+    # Test NUM_THREADS as creation option
+    ds = gdaltest.tiff_drv.CreateCopy('/vsimem/tiff_write_137.tif', src_ds, \
+        options = ['BLOCKYSIZE=16', 'COMPRESS=DEFLATE', 'NUM_THREADS=ALL_CPUS'])
+    src_ds = None
+    ds = None
+    ds = gdal.Open('/vsimem/tiff_write_137.tif')
+    cs = ds.GetRasterBand(1).Checksum()
+    ds = None
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        print(expected_cs)
+        return 'fail'
+
+    # Test NUM_THREADS as open option
+    ds = gdaltest.tiff_drv.Create('/vsimem/tiff_write_137.tif', 4000, 4000, \
+        options = ['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=2', 'SPARSE_OK=YES'])
+    ds = None
+    ds = gdal.OpenEx('/vsimem/tiff_write_137.tif', gdal.OF_UPDATE, open_options = ['NUM_THREADS=4'])
+    ds.GetRasterBand(1).Fill(1)
+    ds = None
+    ds = gdal.Open('/vsimem/tiff_write_137.tif')
+    cs = ds.GetRasterBand(1).Checksum()
+    ds = None
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        print(expected_cs)
+        return 'fail'
+    
+    # Ask data immediately while the block is compressed
+    ds = gdaltest.tiff_drv.Create('/vsimem/tiff_write_137.tif', 4000, 4000, \
+                            options = ['BLOCKYSIZE=4000', 'COMPRESS=DEFLATE', 'NUM_THREADS=4'])
+    ds.WriteRaster(0,0,1,1,'A')
+    ds.FlushCache()
+    val = ds.ReadRaster(0,0,1,1).decode('ascii')
+    if val != 'A':
+        gdaltest.post_reason('fail')
+        print(val)
+        return 'fail'
+    ds = None
+
+    gdal.Unlink('/vsimem/tiff_write_137_src.tif')
+    gdal.Unlink('/vsimem/tiff_write_137.tif')
+
+    return 'success'
+
+###############################################################################
 # Ask to run again tests with GDAL_API_PROXY=YES
 
 def tiff_write_api_proxy():
@@ -6006,12 +6108,14 @@ gdaltest_list = [
     tiff_write_133,
     tiff_write_134,
     tiff_write_135,
+    tiff_write_136,
+    tiff_write_137,
     #tiff_write_api_proxy,
     tiff_write_cleanup ]
 
-#gdaltest_list = [
-#    tiff_write_1,
-#    tiff_write_134 ]
+disabled_gdaltest_list = [
+    tiff_write_1,
+    tiff_write_137 ]
 
 if __name__ == '__main__':
 

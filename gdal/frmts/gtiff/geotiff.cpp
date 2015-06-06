@@ -58,6 +58,7 @@
 #include "cpl_vsi_virtual.h"
 #include <set>
 #include "gdal_mdreader.h"
+#include "cpl_worker_thread_pool.h"
 
 #ifdef INTERNAL_LIBTIFF
 #include "tiffiop.h"
@@ -167,6 +168,23 @@ typedef enum
     VIRTUAL_MEM_IO_YES,
     VIRTUAL_MEM_IO_IF_ENOUGH_RAM
 } VirtualMemIOEnum;
+
+class GTiffDataset;
+typedef struct
+{
+    GTiffDataset *poDS;
+    int           bTIFFIsBigEndian;
+    char         *pszTmpFilename;
+    int           nHeight;
+    uint16        nPredictor;
+    GByte        *pabyBuffer;
+    int           nBufferSize;
+    int           nStripOrTile;
+
+    GByte        *pabyCompressedBuffer; /* owned by pszTmpFilename */
+    int           nCompressedBufferSize;
+    int           bReady;
+} GTiffCompressionJob;
 
 class GTiffDataset : public GDALPamDataset
 {
@@ -354,6 +372,18 @@ class GTiffDataset : public GDALPamDataset
     std::vector<int> anMaskLsb, anOffsetLsb;
     void           DiscardLsb(GByte* pabyBuffer, int nBytes, int iBand);
     void           GetDiscardLsbOption(char** papszOptions);
+    
+    WorkerThreadPool *poCompressThreadPool;
+    std::vector<GTiffCompressionJob> asCompressionJobs;
+    CPLMutex      *hCompressThreadPoolMutex;
+    void           InitCompressionThreads(char** papszOptions);
+    static void    ThreadCompressionFunc(void* pData);
+    void           WaitCompletionForBlock(int nBlockId);
+    void           WriteRawStripOrTile(int nStripOrTile,
+                                 GByte* pabyCompressedBuffer,
+                                 int nCompressedBufferSize);
+    int            SubmitCompressionJob(int nStripOrTile, GByte* pabyData,
+                                        int cc, int nHeight);
 
     int            GuessJPEGQuality(int& bOutHasQuantizationTable,
                                     int& bOutHasHuffmanTable);
@@ -440,6 +470,7 @@ class GTiffDataset : public GDALPamDataset
     static int	    WriteMetadata( GDALDataset *, TIFF *, int, const char *,
                                    const char *, char **, int bExcludeRPBandIMGFileWriting = FALSE );
     static void	    WriteNoDataValue( TIFF *, double );
+    static void     UnsetNoDataValue( TIFF * );
 
     static TIFF *   CreateLL( const char * pszFilename,
                               int nXSize, int nYSize, int nBands,
@@ -908,6 +939,7 @@ public:
     virtual CPLErr          SetColorTable( GDALColorTable * );
     virtual double	    GetNoDataValue( int * );
     virtual CPLErr	    SetNoDataValue( double );
+    virtual CPLErr DeleteNoDataValue();
 
     virtual double GetOffset( int *pbSuccess = NULL );
     virtual CPLErr SetOffset( double dfNewValue );
@@ -2555,6 +2587,8 @@ CPLErr GTiffRasterBand::IReadBlock( int nBlockXOff, int nBlockYOff,
             * (nBlockYSize - (((nBlockYOff+1) * nBlockYSize) % nRasterYSize));
     }
 
+    poGDS->WaitCompletionForBlock(nBlockId);
+
 /* -------------------------------------------------------------------- */
 /*      Handle the case of a strip or tile that doesn't exist yet.      */
 /*      Just set to zeros and return.                                   */
@@ -3594,6 +3628,32 @@ CPLErr GTiffRasterBand::SetNoDataValue( double dfNoData )
 
     bNoDataSet = TRUE;
     dfNoDataValue = dfNoData;
+    return CE_None;
+}
+
+/************************************************************************/
+/*                        DeleteNoDataValue()                           */
+/************************************************************************/
+
+CPLErr GTiffRasterBand::DeleteNoDataValue()
+
+{
+    if( !poGDS->bNoDataSet )
+        return CE_None;
+    if( poGDS->bStreamingOut && poGDS->bCrystalized )
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+                 "Cannot modify nodata at that point in a streamed output file");
+        return CE_Failure;
+    }
+
+    poGDS->bNoDataSet = FALSE;
+    poGDS->dfNoDataValue = -9999.0;
+
+    poGDS->bNoDataChanged = TRUE;
+
+    bNoDataSet = FALSE;
+    dfNoDataValue = -9999.0;;
     return CE_None;
 }
 
@@ -4975,6 +5035,8 @@ GTiffDataset::GTiffDataset()
 
     bIMDRPCMetadataLoaded = FALSE;
     papszMetadataFiles = NULL;
+    poCompressThreadPool = NULL;
+    hCompressThreadPoolMutex = NULL;
 }
 
 /************************************************************************/
@@ -5041,6 +5103,34 @@ int GTiffDataset::Finalize()
 /*      of writing in place the current directory.                      */
 /* -------------------------------------------------------------------- */
     FlushCache();
+    
+    // Finish compression
+    if( poCompressThreadPool )
+    {
+        poCompressThreadPool->WaitCompletion();
+        delete poCompressThreadPool;
+
+        // Flush remaining data
+        for(int i=0;i<(int)asCompressionJobs.size();i++)
+        {
+            if( asCompressionJobs[i].bReady )
+            {
+                if( asCompressionJobs[i].nCompressedBufferSize )
+                {
+                    WriteRawStripOrTile( asCompressionJobs[i].nStripOrTile,
+                                   asCompressionJobs[i].pabyCompressedBuffer,
+                                   asCompressionJobs[i].nCompressedBufferSize );
+                }
+            }
+            CPLFree(asCompressionJobs[i].pabyBuffer);
+            if( asCompressionJobs[i].pszTmpFilename )
+            {
+                VSIUnlink(asCompressionJobs[i].pszTmpFilename);
+                CPLFree(asCompressionJobs[i].pszTmpFilename);
+            }
+        }
+        CPLDestroyMutex(hCompressThreadPoolMutex);
+    }
 
 /* -------------------------------------------------------------------- */
 /*      If there is still changed metadata, then presumably we want     */
@@ -5351,13 +5441,17 @@ int GTiffDataset::WriteEncodedTile(uint32 tile, GByte *pabyData,
     /*
     ** Perform tile fill if needed.
     */
-    if( bNeedTileFill )
+    // TODO: we should also handle the case of nBitsPerSample == 12
+    // but this is more involved...
+    if( bNeedTileFill && nBitsPerSample == 8 )
     {
         int nRightPixelsToFill = 0;
         int nBottomPixelsToFill = 0;
-        int nPixelSize = cc / (nBlockXSize * nBlockYSize);
         unsigned int iX, iY, iSrcX, iSrcY;
-        
+        int nComponents = 1;
+        if( nPlanarConfig == PLANARCONFIG_CONTIG )
+            nComponents = nBands;
+
         CPLDebug( "GTiff", "Filling out jpeg edge tile on write." );
 
         if( iColumn == nBlocksPerRow - 1 )
@@ -5372,9 +5466,9 @@ int GTiffDataset::WriteEncodedTile(uint32 tile, GByte *pabyData,
         {
             for( iY = 0; iY < nBlockYSize; iY++ )
             {
-                memcpy( pabyData + (nBlockXSize * iY + iX) * nPixelSize, 
-                        pabyData + (nBlockXSize * iY + iSrcX) * nPixelSize, 
-                        nPixelSize );
+                memcpy( pabyData + (nBlockXSize * iY + iX) * nComponents, 
+                        pabyData + (nBlockXSize * iY + iSrcX) * nComponents, 
+                        nComponents );
             }
         }
 
@@ -5382,9 +5476,9 @@ int GTiffDataset::WriteEncodedTile(uint32 tile, GByte *pabyData,
         iSrcY = nBlockYSize - nBottomPixelsToFill - 1;
         for( iY = iSrcY+1; iY < nBlockYSize; iY++ )
         {
-            memcpy( pabyData + nBlockXSize * nPixelSize * iY, 
-                    pabyData + nBlockXSize * nPixelSize * iSrcY, 
-                    nPixelSize * nBlockXSize );
+            memcpy( pabyData + nBlockXSize * nComponents * iY, 
+                    pabyData + nBlockXSize * nComponents * iSrcY, 
+                    nBlockXSize * nComponents );
         }
     }
 
@@ -5413,6 +5507,12 @@ int GTiffDataset::WriteEncodedTile(uint32 tile, GByte *pabyData,
         return 0;
     }
 
+/* -------------------------------------------------------------------- */
+/*      Should we do compression in a worker thread ?                   */
+/* -------------------------------------------------------------------- */
+    if( SubmitCompressionJob(tile, pabyData, cc, nBlockYSize) )
+        return 0;
+
     return TIFFWriteEncodedTile(hTIFF, tile, pabyData, cc);
 }
 
@@ -5431,11 +5531,12 @@ int  GTiffDataset::WriteEncodedStrip(uint32 strip, GByte* pabyData,
 /*      amount of valid data we have. (#2748)                           */
 /* -------------------------------------------------------------------- */
     int nStripWithinBand = strip % nBlocksPerBand;
+    int nStripHeight = nRowsPerStrip;
 
     if( (int) ((nStripWithinBand+1) * nRowsPerStrip) > GetRasterYSize() )
     {
-        cc = (cc / nRowsPerStrip)
-            * (GetRasterYSize() - nStripWithinBand * nRowsPerStrip);
+        nStripHeight = GetRasterYSize() - nStripWithinBand * nRowsPerStrip;
+        cc = (cc / nRowsPerStrip) * nStripHeight;
         CPLDebug( "GTiff", "Adjusted bytes to write from %d to %d.", 
                   (int) TIFFStripSize(hTIFF), cc );
     }
@@ -5481,7 +5582,284 @@ int  GTiffDataset::WriteEncodedStrip(uint32 strip, GByte* pabyData,
         return 0;
     }
 
+/* -------------------------------------------------------------------- */
+/*      Should we do compression in a worker thread ?                   */
+/* -------------------------------------------------------------------- */
+    if( SubmitCompressionJob(strip, pabyData, cc, nStripHeight) )
+        return 0;
+
     return TIFFWriteEncodedStrip(hTIFF, strip, pabyData, cc);
+}
+
+/************************************************************************/
+/*                        InitCompressionThreads()                      */
+/************************************************************************/
+
+void GTiffDataset::InitCompressionThreads(char** papszOptions)
+{
+    const char* pszValue = CSLFetchNameValue( papszOptions, "NUM_THREADS" );
+    if (pszValue == NULL)
+        pszValue = CPLGetConfigOption("GDAL_NUM_THREADS", NULL);
+    if( pszValue )
+    {
+        int nThreads;
+        if (EQUAL(pszValue, "ALL_CPUS"))
+            nThreads = CPLGetNumCPUs();
+        else
+            nThreads = atoi(pszValue);
+        if( nThreads > 1 )
+        {
+            if( nCompression == COMPRESSION_NONE ||
+                nCompression == COMPRESSION_JPEG )
+            {
+                CPLDebug("GTiff", "NUM_THREADS ignored with uncompressed or JPEG");
+            }
+            else
+            {
+                CPLDebug("GTiff", "Using %d threads for compression", nThreads);
+                poCompressThreadPool = new WorkerThreadPool();
+                if( !poCompressThreadPool->Setup(nThreads, NULL, NULL) )
+                {
+                    delete poCompressThreadPool;
+                    poCompressThreadPool = NULL;
+                }
+                else
+                {
+                    // Add a margin of an extra job w.r.t thread number
+                    // so as to optimize compression time (enables the main
+                    // thread to do boring I/O while all CPUs are working)
+                    asCompressionJobs.resize(nThreads + 1);
+                    memset(&asCompressionJobs[0], 0,
+                           asCompressionJobs.size() * sizeof(GTiffCompressionJob));
+                    for(int i=0;i<(int)asCompressionJobs.size();i++)
+                    {
+                        asCompressionJobs[i].pszTmpFilename = 
+                            CPLStrdup(CPLSPrintf("/vsimem/gtiff/thread/job/%p",
+                                                 &asCompressionJobs[i]));
+                        asCompressionJobs[i].nStripOrTile = -1;
+                    }
+                    hCompressThreadPoolMutex = CPLCreateMutex();
+                    CPLReleaseMutex(hCompressThreadPoolMutex);
+
+                    // This is kind of a hack, but basically using
+                    // TIFFWriteRawStrip/Tile and then TIFFReadEncodedStrip/Tile
+                    // does not work on a newly created file, because TIFF_MYBUFFER
+                    // is not set in tif_flags
+                    // (if using TIFFWriteEncodedStrip/Tile first, TIFFWriteBufferSetup()
+                    // is automatically called)
+                    // This shoud likely rather fixed in libtiff itself...
+                    TIFFWriteBufferSetup(hTIFF, NULL, (size_t)-1);
+                }
+            }
+        }
+        else
+        {
+            CPLError(CE_Warning, CPLE_AppDefined,
+                     "Invalid value for NUM_THREADS: %s", pszValue);
+        }
+    }
+}
+
+/************************************************************************/
+/*                      ThreadCompressionFunc()                         */
+/************************************************************************/
+
+void GTiffDataset::ThreadCompressionFunc(void* pData)
+{
+    GTiffCompressionJob* psJob = (GTiffCompressionJob*)pData;
+    GTiffDataset* poDS = psJob->poDS;
+    
+    VSILFILE* fpTmp = VSIFOpenL(psJob->pszTmpFilename, "wb+");
+    TIFF* hTIFFTmp = VSI_TIFFOpen(psJob->pszTmpFilename,
+        (psJob->bTIFFIsBigEndian) ? "wb+" : "wl+", fpTmp);
+    int nBlockXSize, nBlockYSize;
+    poDS->GetRasterBand(1)->GetBlockSize(&nBlockXSize, &nBlockYSize);
+    TIFFSetField(hTIFFTmp, TIFFTAG_IMAGEWIDTH, nBlockXSize);
+    TIFFSetField(hTIFFTmp, TIFFTAG_IMAGELENGTH, psJob->nHeight);
+    TIFFSetField(hTIFFTmp, TIFFTAG_BITSPERSAMPLE, poDS->nBitsPerSample);
+    TIFFSetField(hTIFFTmp, TIFFTAG_COMPRESSION, poDS->nCompression);
+    if( psJob->nPredictor != PREDICTOR_NONE )
+        TIFFSetField(hTIFFTmp, TIFFTAG_PREDICTOR, psJob->nPredictor);
+    if( poDS->nZLevel >= 0 )
+        TIFFSetField(hTIFFTmp, TIFFTAG_ZIPQUALITY, poDS->nZLevel);
+    if( poDS->nLZMAPreset > 0 && poDS->nCompression == COMPRESSION_LZMA)
+        TIFFSetField(hTIFFTmp, TIFFTAG_LZMAPRESET, poDS->nLZMAPreset);
+    TIFFSetField(hTIFFTmp, TIFFTAG_PHOTOMETRIC, poDS->nPhotometric);
+    TIFFSetField(hTIFFTmp, TIFFTAG_SAMPLEFORMAT, poDS->nSampleFormat);
+    TIFFSetField(hTIFFTmp, TIFFTAG_SAMPLESPERPIXEL, poDS->nSamplesPerPixel);
+    TIFFSetField(hTIFFTmp, TIFFTAG_ROWSPERSTRIP, poDS->nBlockYSize);
+    TIFFSetField(hTIFFTmp, TIFFTAG_PLANARCONFIG, poDS->nPlanarConfig);
+    
+    int bOK = (TIFFWriteEncodedStrip(hTIFFTmp, 0, psJob->pabyBuffer,
+                                     psJob->nBufferSize) == psJob->nBufferSize);
+    int nOffset = 0;
+    if( bOK )
+    {
+        toff_t* panOffsets = NULL;
+        toff_t* panByteCounts = NULL;
+        TIFFGetField(hTIFFTmp, TIFFTAG_STRIPOFFSETS, &panOffsets);
+        TIFFGetField(hTIFFTmp, TIFFTAG_STRIPBYTECOUNTS, &panByteCounts);
+        
+        nOffset = (int) panOffsets[0];
+        psJob->nCompressedBufferSize = (int) panByteCounts[0];
+    }
+    else
+    {
+        CPLError(CE_Failure, CPLE_AppDefined, "Error when compressing strip/tile %d",
+                 psJob->nStripOrTile);
+    }
+
+    XTIFFClose(hTIFFTmp);
+    VSIFCloseL(fpTmp);
+
+    if( bOK )
+    {
+        vsi_l_offset nFileSize = 0;
+        GByte* pabyCompressedBuffer = VSIGetMemFileBuffer(psJob->pszTmpFilename,
+                                                                &nFileSize,
+                                                                FALSE);
+        CPLAssert(nOffset + psJob->nCompressedBufferSize <= (int)nFileSize);
+        psJob->pabyCompressedBuffer = pabyCompressedBuffer + nOffset;
+    }
+    else
+    {
+        psJob->pabyCompressedBuffer = NULL;
+        psJob->nCompressedBufferSize = 0;
+    }
+
+    CPLAcquireMutex(poDS->hCompressThreadPoolMutex, 1000.0);
+    psJob->bReady = TRUE;
+    CPLReleaseMutex(poDS->hCompressThreadPoolMutex);
+}
+
+/************************************************************************/
+/*                        WriteRawStripOrTile()                         */
+/************************************************************************/
+
+void GTiffDataset::WriteRawStripOrTile(int nStripOrTile,
+                                       GByte* pabyCompressedBuffer,
+                                       int nCompressedBufferSize)
+{
+    //CPLDebug("GTIFF", "Writing raw strip/tile %d, size %d",
+    //         nStripOrTile, nCompressedBufferSize);
+    toff_t *panOffsets = NULL;
+    if( TIFFGetField( hTIFF,
+        TIFFIsTiled( hTIFF ) ? TIFFTAG_TILEOFFSETS : TIFFTAG_STRIPOFFSETS, &panOffsets ) &&
+        panOffsets[nStripOrTile] != 0 )
+    {
+        // Make sure that if the tile/strip already exists, we write at end of file
+        TIFFSetWriteOffset(hTIFF, 0);
+    }
+    if( TIFFIsTiled( hTIFF ) )
+        TIFFWriteRawTile(hTIFF, nStripOrTile, pabyCompressedBuffer, nCompressedBufferSize);
+    else
+        TIFFWriteRawStrip(hTIFF, nStripOrTile, pabyCompressedBuffer, nCompressedBufferSize);
+}
+
+/************************************************************************/
+/*                        WaitCompletionForBlock()                      */
+/************************************************************************/
+
+void GTiffDataset::WaitCompletionForBlock(int nBlockId)
+{
+    if( poCompressThreadPool != NULL )
+    {
+        for(int i=0;i<(int)asCompressionJobs.size();i++)
+        {
+            if( asCompressionJobs[i].nStripOrTile == nBlockId )
+            {
+                CPLDebug("GTIFF",
+                         "Waiting for worker job to finish handling block %d",
+                         nBlockId);
+
+                CPLAcquireMutex(hCompressThreadPoolMutex, 1000.0);
+                int bReady = asCompressionJobs[i].bReady;
+                CPLReleaseMutex(hCompressThreadPoolMutex);
+                if( !bReady )
+                {
+                    poCompressThreadPool->WaitCompletion(0);
+                    CPLAssert( asCompressionJobs[i].bReady == TRUE );
+                }
+
+                if( asCompressionJobs[i].nCompressedBufferSize )
+                {
+                    WriteRawStripOrTile(asCompressionJobs[i].nStripOrTile,
+                                  asCompressionJobs[i].pabyCompressedBuffer,
+                                  asCompressionJobs[i].nCompressedBufferSize);
+                }
+                asCompressionJobs[i].pabyCompressedBuffer = NULL;
+                asCompressionJobs[i].nBufferSize = 0;
+                asCompressionJobs[i].bReady = FALSE;
+                asCompressionJobs[i].nStripOrTile = -1;
+                return;
+            }
+        }
+    }
+}
+
+/************************************************************************/
+/*                      SubmitCompressionJob()                          */
+/************************************************************************/
+
+int GTiffDataset::SubmitCompressionJob(int nStripOrTile, GByte* pabyData,
+                                       int cc, int nHeight)
+{
+/* -------------------------------------------------------------------- */
+/*      Should we do compression in a worker thread ?                   */
+/* -------------------------------------------------------------------- */
+    if( !( poCompressThreadPool != NULL &&
+           (nCompression == COMPRESSION_ADOBE_DEFLATE ||
+            nCompression == COMPRESSION_LZW ||
+            nCompression == COMPRESSION_PACKBITS ||
+            nCompression == COMPRESSION_LZMA) ) )
+        return FALSE;
+
+    int nNextCompressionJobAvail = -1;
+    // Wait that at least one job is finished
+    poCompressThreadPool->WaitCompletion(asCompressionJobs.size() - 1);
+    for(int i=0;i<(int)asCompressionJobs.size();i++)
+    {
+        CPLAcquireMutex(hCompressThreadPoolMutex, 1000.0);
+        int bReady = asCompressionJobs[i].bReady;
+        CPLReleaseMutex(hCompressThreadPoolMutex);
+        if( bReady )
+        {
+            if( asCompressionJobs[i].nCompressedBufferSize )
+            {
+                WriteRawStripOrTile( asCompressionJobs[i].nStripOrTile,
+                                asCompressionJobs[i].pabyCompressedBuffer,
+                                asCompressionJobs[i].nCompressedBufferSize );
+            }
+            asCompressionJobs[i].pabyCompressedBuffer = NULL;
+            asCompressionJobs[i].nBufferSize = 0;
+            asCompressionJobs[i].bReady = FALSE;
+            asCompressionJobs[i].nStripOrTile = -1;
+        }
+        if( asCompressionJobs[i].nBufferSize == 0 )
+        {
+            if( nNextCompressionJobAvail < 0 )
+                nNextCompressionJobAvail = i;
+        }
+    }
+    CPLAssert(nNextCompressionJobAvail >= 0);
+
+    GTiffCompressionJob* psJob = &asCompressionJobs[nNextCompressionJobAvail];
+    psJob->poDS = this;
+    psJob->bTIFFIsBigEndian = TIFFIsBigEndian(hTIFF);
+    psJob->pabyBuffer = (GByte*)CPLRealloc(psJob->pabyBuffer, cc);
+    memcpy(psJob->pabyBuffer, pabyData, cc);
+    psJob->nBufferSize = cc;
+    psJob->nHeight = nHeight;
+    psJob->nStripOrTile = nStripOrTile;
+    psJob->nPredictor = PREDICTOR_NONE;
+    if ( nCompression == COMPRESSION_LZW ||
+         nCompression == COMPRESSION_ADOBE_DEFLATE )
+    {
+        TIFFGetField( hTIFF, TIFFTAG_PREDICTOR, &psJob->nPredictor );
+    }
+
+    poCompressThreadPool->SubmitJob(ThreadCompressionFunc, psJob);
+    return TRUE;
 }
 
 /************************************************************************/
@@ -5714,6 +6092,8 @@ CPLErr GTiffDataset::LoadBlockBuf( int nBlockId, int bReadFromDisk )
             * (nBlockYSize - (((nBlockYOff+1) * nBlockYSize) % nRasterYSize));
         memset( pabyBlockBuf, 0, nBlockBufSize );
     }
+
+    WaitCompletionForBlock(nBlockId);
 
 /* -------------------------------------------------------------------- */
 /*      If we don't have this block already loaded, and we know it      */
@@ -6141,9 +6521,13 @@ void GTiffDataset::FlushDirectory()
             if( bNoDataSet )
             {
                 WriteNoDataValue( hTIFF, dfNoDataValue );
-                bNeedsRewrite = TRUE;
-                bNoDataChanged = FALSE;
             }
+            else
+            {
+                UnsetNoDataValue( hTIFF );
+            }
+            bNeedsRewrite = TRUE;
+            bNoDataChanged = FALSE;
         }
 
         if( bNeedsRewrite )
@@ -7871,6 +8255,20 @@ void GTiffDataset::WriteNoDataValue( TIFF *hTIFF, double dfNoData )
 }
 
 /************************************************************************/
+/*                         UnsetNoDataValue()                           */
+/************************************************************************/
+
+void GTiffDataset::UnsetNoDataValue( TIFF *hTIFF )
+
+{
+#ifdef HAVE_UNSETFIELD
+    TIFFUnsetField( hTIFF, TIFFTAG_GDAL_NODATA );
+#else
+    TIFFSetField( hTIFF, TIFFTAG_GDAL_NODATA, "" );
+#endif
+}
+
+/************************************************************************/
 /*                            SetDirectory()                            */
 /************************************************************************/
 
@@ -8422,6 +8820,7 @@ GDALDataset *GTiffDataset::Open( GDALOpenInfo * poOpenInfo )
     poDS->fpL = poOpenInfo->fpL;
     poOpenInfo->fpL = NULL;
     poDS->bStreamingIn = bStreaming;
+    poDS->nCompression = nCompression;
 
     if( poDS->OpenOffset( hTIFF, &(poDS->poActiveDS),
                           TIFFCurrentDirOffset(hTIFF), TRUE,
@@ -8432,6 +8831,9 @@ GDALDataset *GTiffDataset::Open( GDALOpenInfo * poOpenInfo )
         delete poDS;
         return NULL;
     }
+
+    if( poOpenInfo->eAccess == GA_Update )
+        poDS->InitCompressionThreads(poOpenInfo->papszOpenOptions);
 
     if( nCompression == COMPRESSION_JPEG && poOpenInfo->eAccess == GA_Update )
     {
@@ -9466,8 +9868,7 @@ CPLErr GTiffDataset::OpenOffset( TIFF *hTIFFIn,
         // Lets treat large "one row" bitmaps using the scanline api.
         if( !TIFFIsTiled(hTIFF) 
             && nBlockYSize == nYSize 
-            && nYSize > 2000 
-            && bAllowRGBAInterface )
+            && nYSize > 2000 )
             bTreatAsSplitBitmap = TRUE;
     }
 
@@ -11444,6 +11845,7 @@ GDALDataset *GTiffDataset::Create( const char * pszFilename,
     poDS->nLZMAPreset = GTiffGetLZMAPreset(papszParmList);
     poDS->nJpegQuality = GTiffGetJpegQuality(papszParmList);
     poDS->nJpegTablesMode = GTiffGetJpegTablesMode(papszParmList);
+    poDS->InitCompressionThreads(papszParmList);
 
 #if !defined(BIGTIFF_SUPPORT)
 /* -------------------------------------------------------------------- */
@@ -12335,6 +12737,7 @@ GTiffDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     poDS->nJpegQuality = GTiffGetJpegQuality(papszOptions);
     poDS->nJpegTablesMode = GTiffGetJpegTablesMode(papszOptions);
     poDS->GetDiscardLsbOption(papszOptions);
+    poDS->InitCompressionThreads(papszOptions);
 
     if (nCompression == COMPRESSION_ADOBE_DEFLATE)
     {
@@ -12513,7 +12916,7 @@ GTiffDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
         else
         {
             int iBand, j;
-            GByte* pabyScanline = (GByte *) CPLMalloc(TIFFScanlineSize(hTIFF));
+            GByte* pabyScanline = (GByte *) CPLMalloc(nXSize);
             eErr = CE_None;
             for(iBand=1;iBand<=nBands && eErr == CE_None;iBand++)
             {
@@ -13595,6 +13998,7 @@ void GDALRegister_GTiff()
             strcat( szCreateOptions, ""
 "   <Option name='LZMA_PRESET' type='int' description='LZMA compression level 0(fast)-9(slow)' default='6'/>");
         strcat( szCreateOptions, ""
+"   <Option name='NUM_THREADS' type='string' description='Number of worker threads for compression. Can be set to ALL_CPUS' default='1'/>"
 "   <Option name='NBITS' type='int' description='BITS for sub-byte files (1-7), sub-uint16 (9-15), sub-uint32 (17-31)'/>"
 "   <Option name='INTERLEAVE' type='string-select' default='PIXEL'>"
 "       <Value>BAND</Value>"
@@ -13661,7 +14065,7 @@ void GDALRegister_GTiff()
 "   <Option name='TIFFTAG_TRANSFERRANGE_WHITE' type='string' description='Transfer range for white'/>"
 "   <Option name='STREAMABLE_OUTPUT' type='boolean' default='NO' description='Enforce a mode compatible with a streamable file'/>"
 "</CreationOptionList>" );
-                 
+
 /* -------------------------------------------------------------------- */
 /*      Set the driver details.                                         */
 /* -------------------------------------------------------------------- */
@@ -13677,6 +14081,10 @@ void GDALRegister_GTiff()
                                    "Float64 CInt16 CInt32 CFloat32 CFloat64" );
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST, 
                                    szCreateOptions );
+        poDriver->SetMetadataItem( GDAL_DMD_OPENOPTIONLIST, 
+"<OpenOptionList>"
+"   <Option name='NUM_THREADS' type='string' description='Number of worker threads for compression. Can be set to ALL_CPUS' default='1'/>"
+"</OpenOptionList>" );
         poDriver->SetMetadataItem( GDAL_DMD_SUBDATASETS, "YES" );
         poDriver->SetMetadataItem( GDAL_DCAP_VIRTUALIO, "YES" );
 

@@ -2890,6 +2890,8 @@ typedef struct OGRStyleTableHS OGRStyleTableShadow;
 
 /* use this to not return the int returned by GDAL */
 typedef int RETURN_NONE;
+/* return value that is used for VSI methods that return -1 on error (and set errno) */
+typedef int VSI_RETVAL;
 
 
 
@@ -4555,6 +4557,9 @@ SWIGINTERN void GDALRasterBandShadow_GetNoDataValue(GDALRasterBandShadow *self,d
   }
 SWIGINTERN CPLErr GDALRasterBandShadow_SetNoDataValue(GDALRasterBandShadow *self,double d){
     return GDALSetRasterNoDataValue( self, d );
+  }
+SWIGINTERN CPLErr GDALRasterBandShadow_DeleteNoDataValue(GDALRasterBandShadow *self){
+    return GDALDeleteRasterNoDataValue( self );
   }
 SWIGINTERN char const *GDALRasterBandShadow_GetUnitType(GDALRasterBandShadow *self){
       return GDALGetRasterUnitType( self );
@@ -6875,7 +6880,7 @@ SWIGINTERN PyObject *_wrap_Unlink(PyObject *SWIGUNUSEDPARM(self), PyObject *args
   char *arg1 = (char *) 0 ;
   int bToFree1 = 0 ;
   PyObject * obj0 = 0 ;
-  int result;
+  VSI_RETVAL result;
   
   if (!PyArg_ParseTuple(args,(char *)"O:Unlink",&obj0)) SWIG_fail;
   {
@@ -6896,7 +6901,7 @@ SWIGINTERN PyObject *_wrap_Unlink(PyObject *SWIGUNUSEDPARM(self), PyObject *args
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    result = (int)VSIUnlink((char const *)arg1);
+    result = VSIUnlink((char const *)arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -6952,7 +6957,7 @@ SWIGINTERN PyObject *_wrap_Mkdir(PyObject *SWIGUNUSEDPARM(self), PyObject *args)
   int ecode2 = 0 ;
   PyObject * obj0 = 0 ;
   PyObject * obj1 = 0 ;
-  int result;
+  VSI_RETVAL result;
   
   if (!PyArg_ParseTuple(args,(char *)"OO:Mkdir",&obj0,&obj1)) SWIG_fail;
   {
@@ -6978,7 +6983,7 @@ SWIGINTERN PyObject *_wrap_Mkdir(PyObject *SWIGUNUSEDPARM(self), PyObject *args)
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    result = (int)VSIMkdir((char const *)arg1,arg2);
+    result = VSIMkdir((char const *)arg1,arg2);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -7006,7 +7011,7 @@ SWIGINTERN PyObject *_wrap_Rmdir(PyObject *SWIGUNUSEDPARM(self), PyObject *args)
   char *arg1 = (char *) 0 ;
   int bToFree1 = 0 ;
   PyObject * obj0 = 0 ;
-  int result;
+  VSI_RETVAL result;
   
   if (!PyArg_ParseTuple(args,(char *)"O:Rmdir",&obj0)) SWIG_fail;
   {
@@ -7027,7 +7032,7 @@ SWIGINTERN PyObject *_wrap_Rmdir(PyObject *SWIGUNUSEDPARM(self), PyObject *args)
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    result = (int)VSIRmdir((char const *)arg1);
+    result = VSIRmdir((char const *)arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -7062,7 +7067,7 @@ SWIGINTERN PyObject *_wrap_Rename(PyObject *SWIGUNUSEDPARM(self), PyObject *args
   int alloc2 = 0 ;
   PyObject * obj0 = 0 ;
   PyObject * obj1 = 0 ;
-  int result;
+  VSI_RETVAL result;
   
   if (!PyArg_ParseTuple(args,(char *)"OO:Rename",&obj0,&obj1)) SWIG_fail;
   res1 = SWIG_AsCharPtrAndSize(obj0, &buf1, NULL, &alloc1);
@@ -7079,7 +7084,7 @@ SWIGINTERN PyObject *_wrap_Rename(PyObject *SWIGUNUSEDPARM(self), PyObject *args
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    result = (int)VSIRename((char const *)arg1,(char const *)arg2);
+    result = VSIRename((char const *)arg1,(char const *)arg2);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -7425,6 +7430,7 @@ SWIGINTERN PyObject *_wrap_VSIFCloseL(PyObject *SWIGUNUSEDPARM(self), PyObject *
   VSILFILE *arg1 = (VSILFILE *) 0 ;
   int res1 ;
   PyObject * obj0 = 0 ;
+  VSI_RETVAL result;
   
   if (!PyArg_ParseTuple(args,(char *)"O:VSIFCloseL",&obj0)) SWIG_fail;
   res1 = SWIG_ConvertPtr(obj0,SWIG_as_voidptrptr(&arg1), 0, 0);
@@ -7435,7 +7441,7 @@ SWIGINTERN PyObject *_wrap_VSIFCloseL(PyObject *SWIGUNUSEDPARM(self), PyObject *
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    VSIFCloseL(arg1);
+    result = VSIFCloseL(arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -7443,7 +7449,7 @@ SWIGINTERN PyObject *_wrap_VSIFCloseL(PyObject *SWIGUNUSEDPARM(self), PyObject *
       }
     }
   }
-  resultobj = SWIG_Py_Void();
+  resultobj = SWIG_From_int(static_cast< int >(result));
   return resultobj;
 fail:
   return NULL;
@@ -15070,6 +15076,49 @@ SWIGINTERN PyObject *_wrap_Band_SetNoDataValue(PyObject *SWIGUNUSEDPARM(self), P
       CPLErrorReset();
     }
     result = (CPLErr)GDALRasterBandShadow_SetNoDataValue(arg1,arg2);
+    if ( bUseExceptions ) {
+      CPLErr eclass = CPLGetLastErrorType();
+      if ( eclass == CE_Failure || eclass == CE_Fatal ) {
+        SWIG_exception( SWIG_RuntimeError, CPLGetLastErrorMsg() );
+      }
+    }
+  }
+  resultobj = SWIG_From_int(static_cast< int >(result));
+  {
+    /* %typemap(ret) CPLErr */
+    if ( bUseExceptions == 0 ) {
+      /* We're not using exceptions.  And no error has occurred */
+      if ( resultobj == 0 ) {
+        /* No other return values set so return ErrorCode */
+        resultobj = PyInt_FromLong(result);
+      }
+    }
+  }
+  return resultobj;
+fail:
+  return NULL;
+}
+
+
+SWIGINTERN PyObject *_wrap_Band_DeleteNoDataValue(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  GDALRasterBandShadow *arg1 = (GDALRasterBandShadow *) 0 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+  PyObject * obj0 = 0 ;
+  CPLErr result;
+  
+  if (!PyArg_ParseTuple(args,(char *)"O:Band_DeleteNoDataValue",&obj0)) SWIG_fail;
+  res1 = SWIG_ConvertPtr(obj0, &argp1,SWIGTYPE_p_GDALRasterBandShadow, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Band_DeleteNoDataValue" "', argument " "1"" of type '" "GDALRasterBandShadow *""'"); 
+  }
+  arg1 = reinterpret_cast< GDALRasterBandShadow * >(argp1);
+  {
+    if ( bUseExceptions ) {
+      CPLErrorReset();
+    }
+    result = (CPLErr)GDALRasterBandShadow_DeleteNoDataValue(arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -24163,11 +24212,11 @@ static PyMethodDef SwigMethods[] = {
 	 { (char *)"CPLBinaryToHex", _wrap_CPLBinaryToHex, METH_VARARGS, (char *)"CPLBinaryToHex(int nBytes) -> retStringAndCPLFree"},
 	 { (char *)"CPLHexToBinary", _wrap_CPLHexToBinary, METH_VARARGS, (char *)"CPLHexToBinary(char pszHex, int pnBytes) -> GByte"},
 	 { (char *)"FileFromMemBuffer", _wrap_FileFromMemBuffer, METH_VARARGS, (char *)"FileFromMemBuffer(char utf8_path, int nBytes)"},
-	 { (char *)"Unlink", _wrap_Unlink, METH_VARARGS, (char *)"Unlink(char utf8_path) -> int"},
+	 { (char *)"Unlink", _wrap_Unlink, METH_VARARGS, (char *)"Unlink(char utf8_path) -> VSI_RETVAL"},
 	 { (char *)"HasThreadSupport", _wrap_HasThreadSupport, METH_VARARGS, (char *)"HasThreadSupport() -> int"},
-	 { (char *)"Mkdir", _wrap_Mkdir, METH_VARARGS, (char *)"Mkdir(char utf8_path, int mode) -> int"},
-	 { (char *)"Rmdir", _wrap_Rmdir, METH_VARARGS, (char *)"Rmdir(char utf8_path) -> int"},
-	 { (char *)"Rename", _wrap_Rename, METH_VARARGS, (char *)"Rename(char pszOld, char pszNew) -> int"},
+	 { (char *)"Mkdir", _wrap_Mkdir, METH_VARARGS, (char *)"Mkdir(char utf8_path, int mode) -> VSI_RETVAL"},
+	 { (char *)"Rmdir", _wrap_Rmdir, METH_VARARGS, (char *)"Rmdir(char utf8_path) -> VSI_RETVAL"},
+	 { (char *)"Rename", _wrap_Rename, METH_VARARGS, (char *)"Rename(char pszOld, char pszNew) -> VSI_RETVAL"},
 	 { (char *)"StatBuf_mode_get", _wrap_StatBuf_mode_get, METH_VARARGS, (char *)"StatBuf_mode_get(StatBuf self) -> int"},
 	 { (char *)"StatBuf_size_get", _wrap_StatBuf_size_get, METH_VARARGS, (char *)"StatBuf_size_get(StatBuf self) -> GIntBig"},
 	 { (char *)"StatBuf_mtime_get", _wrap_StatBuf_mtime_get, METH_VARARGS, (char *)"StatBuf_mtime_get(StatBuf self) -> GIntBig"},
@@ -24177,7 +24226,7 @@ static PyMethodDef SwigMethods[] = {
 	 { (char *)"StatBuf_swigregister", StatBuf_swigregister, METH_VARARGS, NULL},
 	 { (char *)"VSIStatL", _wrap_VSIStatL, METH_VARARGS, (char *)"VSIStatL(char utf8_path, int nFlags = 0) -> int"},
 	 { (char *)"VSIFOpenL", _wrap_VSIFOpenL, METH_VARARGS, (char *)"VSIFOpenL(char utf8_path, char pszMode) -> VSILFILE"},
-	 { (char *)"VSIFCloseL", _wrap_VSIFCloseL, METH_VARARGS, (char *)"VSIFCloseL(VSILFILE arg0)"},
+	 { (char *)"VSIFCloseL", _wrap_VSIFCloseL, METH_VARARGS, (char *)"VSIFCloseL(VSILFILE arg0) -> VSI_RETVAL"},
 	 { (char *)"VSIFSeekL", _wrap_VSIFSeekL, METH_VARARGS, (char *)"VSIFSeekL(VSILFILE arg0, GIntBig arg1, int arg2) -> int"},
 	 { (char *)"VSIFTellL", _wrap_VSIFTellL, METH_VARARGS, (char *)"VSIFTellL(VSILFILE arg0) -> GIntBig"},
 	 { (char *)"VSIFTruncateL", _wrap_VSIFTruncateL, METH_VARARGS, (char *)"VSIFTruncateL(VSILFILE arg0, GIntBig arg1) -> int"},
@@ -24370,6 +24419,7 @@ static PyMethodDef SwigMethods[] = {
 	 { (char *)"Band_SetRasterColorInterpretation", _wrap_Band_SetRasterColorInterpretation, METH_VARARGS, (char *)"Band_SetRasterColorInterpretation(Band self, GDALColorInterp val) -> CPLErr"},
 	 { (char *)"Band_GetNoDataValue", _wrap_Band_GetNoDataValue, METH_VARARGS, (char *)"Band_GetNoDataValue(Band self)"},
 	 { (char *)"Band_SetNoDataValue", _wrap_Band_SetNoDataValue, METH_VARARGS, (char *)"Band_SetNoDataValue(Band self, double d) -> CPLErr"},
+	 { (char *)"Band_DeleteNoDataValue", _wrap_Band_DeleteNoDataValue, METH_VARARGS, (char *)"Band_DeleteNoDataValue(Band self) -> CPLErr"},
 	 { (char *)"Band_GetUnitType", _wrap_Band_GetUnitType, METH_VARARGS, (char *)"Band_GetUnitType(Band self) -> char"},
 	 { (char *)"Band_SetUnitType", _wrap_Band_SetUnitType, METH_VARARGS, (char *)"Band_SetUnitType(Band self, char val) -> CPLErr"},
 	 { (char *)"Band_GetRasterCategoryNames", _wrap_Band_GetRasterCategoryNames, METH_VARARGS, (char *)"Band_GetRasterCategoryNames(Band self) -> char"},

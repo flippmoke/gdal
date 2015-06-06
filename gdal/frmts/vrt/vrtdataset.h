@@ -191,6 +191,8 @@ class CPL_DLL VRTDataset : public GDALDataset
 
     /* Used by PDF driver for example */
     GDALDataset*        GetSingleSimpleSource();
+    
+    void                UnsetPreservedRelativeFilenames();
  
     static int          Identify( GDALOpenInfo * );
     static GDALDataset *Open( GDALOpenInfo * );
@@ -294,6 +296,7 @@ class CPL_DLL VRTRasterBand : public GDALRasterBand
 
     virtual CPLErr SetNoDataValue( double );
     virtual double GetNoDataValue( int *pbSuccess = NULL );
+    virtual CPLErr DeleteNoDataValue();
 
     virtual CPLErr SetColorTable( GDALColorTable * ); 
     virtual GDALColorTable *GetColorTable();
@@ -606,6 +609,9 @@ protected:
     int                 bNoDataSet;
     double              dfNoDataValue;
     CPLString           osResampling;
+    
+    int                 bRelativeToVRTOri;
+    CPLString           osSourceFileNameOri;
 
 public:
             VRTSimpleSource();
@@ -669,6 +675,8 @@ public:
                                GSpacing nPixelSpace, GSpacing nLineSpace,
                                GSpacing nBandSpace,
                                GDALRasterIOExtraArg* psExtraArg);
+
+    void             UnsetPreservedRelativeFilenames();
 };
 
 /************************************************************************/

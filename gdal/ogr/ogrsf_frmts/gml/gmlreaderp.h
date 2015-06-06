@@ -465,6 +465,8 @@ private:
     int           m_bReportAllAttributes;
     
     int           m_bIsWFSJointLayer;
+    
+    int           m_bEmptyAsNull;
 
     int           ParseXMLHugeFile( const char *pszOutputFilename, 
                                     const int bSqliteIsTempFile,
@@ -550,10 +552,14 @@ public:
 
     int         IsSequentialLayers() const { return m_bSequentialLayers == TRUE; }
     
+    void        SetReportAllAttributes(int bFlag) { m_bReportAllAttributes = bFlag; }
     int         ReportAllAttributes() const { return m_bReportAllAttributes; }
     
     void             SetIsWFSJointLayer( int bFlag ) { m_bIsWFSJointLayer = bFlag; }
     int              IsWFSJointLayer() const { return m_bIsWFSJointLayer; }
+    
+    void             SetEmptyAsNull( int bFlag ) { m_bEmptyAsNull = bFlag; }
+    int              IsEmptyAsNull() const { return m_bEmptyAsNull; }
 
     static CPLMutex* hMutex;
 };
