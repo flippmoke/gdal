@@ -2593,7 +2593,7 @@ CPLErr GTiffRasterBand::IReadBlock( int nBlockXOff, int nBlockYOff,
 /*      Handle the case of a strip or tile that doesn't exist yet.      */
 /*      Just set to zeros and return.                                   */
 /* -------------------------------------------------------------------- */
-    if( !poGDS->IsBlockAvailable(nBlockId) )
+    if( nBlockId != poGDS->nLoadedBlock && !poGDS->IsBlockAvailable(nBlockId) )
     {
         NullBlock( pImage );
         return CE_None;
@@ -4452,7 +4452,7 @@ CPLErr GTiffOddBitsBand::IReadBlock( int nBlockXOff, int nBlockYOff,
 /*	exist yet, but that we want to read.  Just set to zeros and	*/
 /*	return.								*/
 /* -------------------------------------------------------------------- */
-    if( !poGDS->IsBlockAvailable(nBlockId) )
+    if( nBlockId != poGDS->nLoadedBlock && !poGDS->IsBlockAvailable(nBlockId) )
     {
         NullBlock( pImage );
         return CE_None;
@@ -6398,10 +6398,16 @@ int GTiffDataset::IsBlockAvailable( int nBlockId )
             vsi_l_offset nCurOffset = VSIFTellL(fp);
             if( ~(hTIFF->tif_dir.td_stripoffset[nBlockId]) == 0 )
             {
+                vsi_l_offset nDirOffset;
+                if( hTIFF->tif_flags&TIFF_BIGTIFF )
+                    nDirOffset = hTIFF->tif_dir.td_stripoffset_entry.tdir_offset.toff_long8;
+                else
+                    nDirOffset = hTIFF->tif_dir.td_stripoffset_entry.tdir_offset.toff_long;
+
                 if( hTIFF->tif_dir.td_stripoffset_entry.tdir_type == TIFF_LONG )
                 {
                     GTiffCacheOffsetOrCount(fp,
-                                            hTIFF->tif_dir.td_stripoffset_entry.tdir_offset.toff_long,
+                                            nDirOffset,
                                             nBlockId,
                                             hTIFF->tif_dir.td_nstrips,
                                             hTIFF->tif_dir.td_stripoffset,
@@ -6410,7 +6416,7 @@ int GTiffDataset::IsBlockAvailable( int nBlockId )
                 else
                 {
                     GTiffCacheOffsetOrCount(fp,
-                                            hTIFF->tif_dir.td_stripoffset_entry.tdir_offset.toff_long8,
+                                            nDirOffset,
                                             nBlockId,
                                             hTIFF->tif_dir.td_nstrips,
                                             hTIFF->tif_dir.td_stripoffset,
@@ -6420,10 +6426,16 @@ int GTiffDataset::IsBlockAvailable( int nBlockId )
 
             if( ~(hTIFF->tif_dir.td_stripbytecount[nBlockId]) == 0 )
             {
+                vsi_l_offset nDirOffset;
+                if( hTIFF->tif_flags&TIFF_BIGTIFF )
+                    nDirOffset = hTIFF->tif_dir.td_stripbytecount_entry.tdir_offset.toff_long8;
+                else
+                    nDirOffset = hTIFF->tif_dir.td_stripbytecount_entry.tdir_offset.toff_long;
+
                 if( hTIFF->tif_dir.td_stripbytecount_entry.tdir_type == TIFF_LONG )
                 {
                     GTiffCacheOffsetOrCount(fp,
-                                            hTIFF->tif_dir.td_stripbytecount_entry.tdir_offset.toff_long,
+                                            nDirOffset,
                                             nBlockId,
                                             hTIFF->tif_dir.td_nstrips,
                                             hTIFF->tif_dir.td_stripbytecount,
@@ -6432,7 +6444,7 @@ int GTiffDataset::IsBlockAvailable( int nBlockId )
                 else
                 {
                     GTiffCacheOffsetOrCount(fp,
-                                            hTIFF->tif_dir.td_stripbytecount_entry.tdir_offset.toff_long8,
+                                            nDirOffset,
                                             nBlockId,
                                             hTIFF->tif_dir.td_nstrips,
                                             hTIFF->tif_dir.td_stripbytecount,
@@ -7850,14 +7862,14 @@ void GTiffDataset::WriteRPC( GDALDataset *poSrcDS, TIFF *hTIFF,
             bRPCSerializedOtherWay = TRUE;
         }
 
-        /* Write RPB file if explicitely asked, or if a non GDAL specific */
+        /* Write RPB file if explicitly asked, or if a non GDAL specific */
         /* profile is selected and RPCTXT is not asked */
-        int bRPBExplicitelyAsked = CSLFetchBoolean( papszCreationOptions, "RPB", FALSE );
-        int bRPBExplicitelyDenied = !CSLFetchBoolean( papszCreationOptions, "RPB", TRUE );
+        int bRPBExplicitlyAsked = CSLFetchBoolean( papszCreationOptions, "RPB", FALSE );
+        int bRPBExplicitlyDenied = !CSLFetchBoolean( papszCreationOptions, "RPB", TRUE );
         if( (!EQUAL(pszProfile,"GDALGeoTIFF") && 
              !CSLFetchBoolean( papszCreationOptions, "RPCTXT", FALSE ) &&
-             !bRPBExplicitelyDenied )
-            || bRPBExplicitelyAsked )
+             !bRPBExplicitlyDenied )
+            || bRPBExplicitlyAsked )
         {
             if( !bWriteOnlyInPAMIfNeeded )
                 GDALWriteRPBFile( pszTIFFFilename, papszRPCMD );
@@ -8276,8 +8288,6 @@ int GTiffDataset::SetDirectory( toff_t nNewOffset )
 
 {
     Crystalize();
-
-    FlushBlockBuf();
 
     if( nNewOffset == 0 )
         nNewOffset = nDirOffset;
